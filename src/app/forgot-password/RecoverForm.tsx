@@ -71,7 +71,7 @@ export function RecoverForm() {
       {error && <p className="text-sm text-skip" role="alert">{error}</p>}
       <button className="btn btn-primary w-full !py-2.5" disabled={busy}>{busy ? "Saving…" : "Set new password"}</button>
       <p className="text-sm text-muted leading-relaxed">
-        Lost your recovery code too? The password can&apos;t be reset without it. Ask whoever runs Read Assist at your school for help.
+        Lost your recovery code too? The password can&apos;t be reset without it. Ask whoever runs eyeRead at your school for help.
       </p>
       <p className="text-sm text-center">
         <Link href="/login" className="text-accent hover:underline">← Back to sign in</Link>

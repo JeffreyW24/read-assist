@@ -114,15 +114,15 @@ Back in the teacher window, refresh the course page.
    ```
 2. In Chrome, open `chrome://extensions` and turn on **Developer mode** (top right).
 3. Click **Load unpacked** and pick the folder `read-assist/extension`.
-4. Pin it: click the puzzle icon, then the pin next to Read Assist.
+4. Pin it: click the puzzle icon, then the pin next to eyeRead.
 5. Open a long article, e.g. a Wikipedia page or a WSJ article you're logged in to. **Reload the tab** if it was already open.
 6. Read part of it, then click the extension button.
    - ✅ Coverage %, time, a read/skimmed/skipped bar, and a list of skipped sections. Click one to jump to it.
    - **Show on page** colors each paragraph green, yellow or red.
 7. No camera is needed: it measures what's on screen while you're active.
    - **Start eye-tracked reading** in the popup is an experimental camera mode. It's untested with a real webcam, so expect rough edges.
-8. **Bring it into your student account:** sign in to Read Assist as a student and open the home page.
-   - ✅ The first time, a box asks "Add your web reading to Read Assist?" Click **Allow**.
+8. **Bring it into your student account:** sign in to eyeRead as a student and open the home page.
+   - ✅ The first time, a box asks "Add your web reading to eyeRead?" Click **Allow**.
    - ✅ The articles appear under **Your own readings** with the site, reading time and a "Read N%" pill. Click one for a paragraph-by-paragraph view, a link back to the article and **Remove**.
    - After that, new or re-read articles come in each time you open the home page. Only short snippets of each paragraph are saved, not the article.
 

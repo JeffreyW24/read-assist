@@ -1,4 +1,4 @@
-# Read Assist
+# eyeRead
 
 A reading coach that uses your laptop webcam to follow your reading line by line. It tells you what you read, skimmed or skipped, and uses Google Gemini to summarize anything you missed.
 

@@ -1,5 +1,5 @@
 "use client";
-// Brings in articles the Read Assist browser extension measured on other sites (WSJ etc.).
+// Brings in articles the eyeRead browser extension measured on other sites (WSJ etc.).
 // The extension's content script runs on this page too: we say hello, it asks the student
 // once whether to share, then hands over new or updated articles, and we save them to the
 // account with the normal sign-in. Nothing happens if the extension isn't installed.
@@ -67,7 +67,7 @@ export function ExtensionSync({ account }: { account: string }) {
 
   const text: Record<State, string> = {
     waiting: "",
-    none: "Read articles on other sites, like the WSJ? Add the Read Assist browser extension and they'll show up here.",
+    none: "Read articles on other sites, like the WSJ? Add the eyeRead browser extension and they'll show up here.",
     asking: "The browser extension is asking whether to add your web reading. Choose Allow in the box on the page.",
     syncing: "Adding articles from the browser extension…",
     done: added

@@ -180,7 +180,7 @@ export interface ClassDigest {
 }
 
 /**
- * An article read on another website (e.g. the WSJ) and measured by the Read Assist browser
+ * An article read on another website (e.g. the WSJ) and measured by the eyeRead browser
  * extension, then imported into the student's account. Simpler than a Session: the extension
  * only knows per-paragraph read / skimmed / skipped and the time spent.
  */

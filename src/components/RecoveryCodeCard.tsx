@@ -19,11 +19,11 @@ export function RecoveryCodeCard({
   const [copied, setCopied] = useState(false);
 
   function download() {
-    const text = `Read Assist recovery code\n\nUsername: ${username}\nRecovery code: ${code}\n\nUse it on the "Forgot password?" page to set a new password.\nIt works once; you'll get a new one after using it.\n`;
+    const text = `eyeRead recovery code\n\nUsername: ${username}\nRecovery code: ${code}\n\nUse it on the "Forgot password?" page to set a new password.\nIt works once; you'll get a new one after using it.\n`;
     const url = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
     const a = document.createElement("a");
     a.href = url;
-    a.download = `read-assist-recovery-code-${username}.txt`;
+    a.download = `eyeread-recovery-code-${username}.txt`;
     a.click();
     URL.revokeObjectURL(url);
   }

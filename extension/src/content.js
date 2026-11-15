@@ -1,4 +1,4 @@
-// Read Assist content script.
+// eyeRead content script.
 // Phase 1 (always on, no camera): finds the article, splits it into paragraphs, and
 // spreads the time the reader spends on each screenful over the words that are on screen.
 // Phase 2 (opt-in): webcam gaze arrives from the offscreen document; after a quick
@@ -557,7 +557,7 @@ import { OneEuroFilter } from "../../src/lib/gaze/oneEuro";
       if (eye.calibrating) calibrate();
     } else if (msg.status === "need-permission") {
       showCard(
-        "<h2>Allow the camera</h2><p>A Read Assist tab just opened to ask for camera access (Chrome can't ask from a background page). Allow it there, then come back and press Try again.</p>",
+        "<h2>Allow the camera</h2><p>A eyeRead tab just opened to ask for camera access (Chrome can't ask from a background page). Allow it there, then come back and press Try again.</p>",
         [["Try again", () => { eye.calibrating = false; eyeBegin(); }, true], ["Cancel", () => eyeStop()]],
       );
     } else if (msg.status === "error") {
@@ -676,8 +676,8 @@ import { OneEuroFilter } from "../../src/lib/gaze/oneEuro";
     save();
   }
 
-  // ---------------------------------------------------------------- Read Assist account bridge
-  // The Read Assist home page (a student's dashboard) says hello with window.postMessage.
+  // ---------------------------------------------------------------- eyeRead account bridge
+  // The eyeRead home page (a student's dashboard) says hello with window.postMessage.
   // If the student has allowed that site, we hand it the articles measured elsewhere; the
   // page uploads them to the account with its own sign-in. The extension never logs in.
   // Any page could send this hello, so nothing is shared until the student clicks Allow in a
@@ -705,8 +705,8 @@ import { OneEuroFilter } from "../../src/lib/gaze/oneEuro";
           button.primary{background:#1c1917;color:#fff;border-color:#1c1917}
         </style>
         <div class="veil" role="dialog" aria-modal="true" aria-labelledby="t"><div class="card">
-          <h2 id="t">Add your web reading to Read Assist?</h2>
-          <p><b>${site}</b> is asking for the articles the Read Assist extension measured on other sites: each article's title, link, how much you read and a short snippet of each paragraph. They'll appear under "Your own readings" in your account.</p>
+          <h2 id="t">Add your web reading to eyeRead?</h2>
+          <p><b>${site}</b> is asking for the articles the eyeRead extension measured on other sites: each article's title, link, how much you read and a short snippet of each paragraph. They'll appear under "Your own readings" in your account.</p>
           <button class="primary" data-a="1">Allow</button><button data-a="0">Not now</button>
         </div></div>`;
       const done = (ok) => {
@@ -728,7 +728,7 @@ import { OneEuroFilter } from "../../src/lib/gaze/oneEuro";
     const out = [], sent = {};
     for (const [k, rec] of Object.entries(all)) {
       if (!k.startsWith("art:") || !rec?.paras) continue;
-      if (rec.url?.startsWith(location.origin)) continue; // pages of Read Assist itself
+      if (rec.url?.startsWith(location.origin)) continue; // pages of eyeRead itself
       if ((synced[k] || 0) >= (rec.lastSeen || 0)) continue; // already handed over, unchanged
       const rep = buildReport(rec);
       out.push({

@@ -1,4 +1,4 @@
-// Articles read on other sites, handed over by the Read Assist browser extension.
+// Articles read on other sites, handed over by the eyeRead browser extension.
 // The dashboard page receives them from the extension (in the student's own browser) and
 // posts them here with the student's normal sign-in cookie, so the extension needs no login.
 import { getCurrentUser } from "@/lib/auth";

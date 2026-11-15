@@ -109,8 +109,8 @@ async function loadArticle() {
   }
   showEmpty(
     res === null
-      ? "Read Assist isn't running on this page. Reload the page (pages opened before the extension was loaded need a reload), or this page type isn't allowed (chrome:// pages, the Web Store)."
-      : "No article found on this page. Read Assist tracks pages with at least ~250 words of body text.",
+      ? "eyeRead isn't running on this page. Reload the page (pages opened before the extension was loaded need a reload), or this page type isn't allowed (chrome:// pages, the Web Store)."
+      : "No article found on this page. eyeRead tracks pages with at least ~250 words of body text.",
   );
 }
 

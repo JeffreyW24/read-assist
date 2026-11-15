@@ -40,7 +40,7 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# Read Assist
+# eyeRead
 /public/mediapipe
 /public/pdfjs
 /data

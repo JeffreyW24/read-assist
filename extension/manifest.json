@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
-  "name": "Read Assist — how much did I read?",
+  "name": "eyeRead — how much did I read?",
   "version": "0.1.0",
   "description": "Measures how much of an article you actually read: per-paragraph read / skimmed / skipped, on-device.",
-  "action": { "default_popup": "popup.html", "default_title": "Read Assist" },
+  "action": { "default_popup": "popup.html", "default_title": "eyeRead" },
   "background": { "service_worker": "dist/background.js" },
   "permissions": ["storage", "offscreen"],
   "content_scripts": [

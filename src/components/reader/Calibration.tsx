@@ -261,7 +261,7 @@ export function Calibration({
             Dots will appear around the screen. <b className="text-fg">Look right at each dot and click it.</b> Then
             five more dots appear on their own; just look at them. Keep your head fairly still, like you would while reading.
           </p>
-          <p className="text-muted mt-3 text-sm">This teaches Read Assist how <i>your</i> eyes look on <i>this</i> screen. About 30 seconds.</p>
+          <p className="text-muted mt-3 text-sm">This teaches eyeRead how <i>your</i> eyes look on <i>this</i> screen. About 30 seconds.</p>
           <div className="mt-6 flex gap-2 justify-end">
             {onCancel && <button className="btn btn-ghost" onClick={onCancel}>Back</button>}
             <button className="btn btn-primary" onClick={() => setPhase("calibrate")}>Begin</button>

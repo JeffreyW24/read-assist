@@ -115,7 +115,7 @@ export function ReadingCalibration({
             <b className="text-fg">Space</b> (or click Done).
           </p>
           <p className="text-muted mt-3 text-sm leading-relaxed">
-            This teaches Read Assist how fast <i>you</i> read, so reading and skimming are judged against your own
+            This teaches eyeRead how fast <i>you</i> read, so reading and skimming are judged against your own
             pace. About 45 seconds.
           </p>
           <div className="mt-6 flex gap-2 justify-end">

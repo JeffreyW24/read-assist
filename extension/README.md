@@ -1,4 +1,4 @@
-# Read Assist — browser extension (prototype)
+# eyeRead — browser extension (prototype)
 
 A Chrome (Manifest V3) extension that tells you how much of a news article you
 actually read: coverage %, reading time, and which sections you skipped. It is a

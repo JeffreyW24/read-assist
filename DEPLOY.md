@@ -1,4 +1,4 @@
-# Putting Read Assist on GitHub and on the web
+# Putting eyeRead on GitHub and on the web
 
 Everything below uses free tiers. Nothing here needs a credit card.
 

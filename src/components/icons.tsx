@@ -83,7 +83,7 @@ export function Logo({ size = 22 }: { size?: number }) {
         <path d="M6 9h12M6 12.5h9M6 16h11" stroke="var(--accent-fg)" strokeWidth="1.8" strokeLinecap="round" />
         <circle cx="17.5" cy="12.5" r="1.6" fill="var(--accent-fg)" />
       </svg>
-      Read Assist
+      eyeRead
     </span>
   );
 }

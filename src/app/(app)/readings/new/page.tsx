@@ -14,7 +14,7 @@ export default async function NewReadingPage({ searchParams }: PageProps<"/readi
         title={user.role === "professor" ? "Post a reading" : "Upload a reading"}
         subtitle={
           user.role === "professor"
-            ? "Paste the text or upload a PDF. Students will read it in the Read Assist reader."
+            ? "Paste the text or upload a PDF. Students will read it in the eyeRead reader."
             : "Practice with anything you've been assigned: paste text or upload a PDF."
         }
       />

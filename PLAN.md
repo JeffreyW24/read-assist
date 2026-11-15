@@ -1,4 +1,4 @@
-# Read Assist: Research, Feasibility & Plan
+# eyeRead: Research, Feasibility & Plan
 
 _Brainstorm doc. No code yet. Last updated 2026-11-12._
 

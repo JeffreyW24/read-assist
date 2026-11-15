@@ -34,7 +34,7 @@ async function wantsDyslexiaFont(): Promise<boolean> {
 }
 
 export const metadata: Metadata = {
-  title: "Read Assist",
+  title: "eyeRead",
   description: "A reading coach that notices what you skipped, so you don't have to.",
 };
 
