@@ -10,14 +10,18 @@ export function RecallBox({ sessionId, section, initial }: { sessionId: string; 
 
   async function save() {
     setState("saving");
-    const res = await fetch(`/api/sessions/${sessionId}/recall`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ section, text }),
-    });
-    if (!res.ok) return setState("error");
-    setSaved(text);
-    setState("idle");
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/recall`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ section, text }),
+      });
+      if (!res.ok) return setState("error");
+      setSaved(text);
+      setState("idle");
+    } catch {
+      setState("error"); // offline or the server didn't answer: let them try again
+    }
   }
 
   return (

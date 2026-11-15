@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireUser } from "@/lib/auth";
-import { canViewCourse, getCourse, readingsForCourse, sessionsFor, sessionsForReadings, studentsInCourse } from "@/lib/db";
+import { canViewCourse, getCourse, readingsForCourse, sessionsFor, studentSessionsForReadings, studentsInCourse } from "@/lib/db";
 import { bestOf, bestPerStudent, plural, studentSummary, totalEyesOnPerStudent } from "@/lib/insights";
 import { estimateMinutes, formatDueDate, formatDuration } from "@/lib/text";
 import type { Course, Reading, Session, User } from "@/lib/types";
@@ -9,6 +9,7 @@ import { PageHeader } from "@/components/AppShell";
 import { EmptyState, OverduePill, RowLink, Section, Stat, StatusPill, isOverdue } from "@/components/ui";
 import { JoinCodeCard } from "@/components/CourseForms";
 import { IconBook, IconPlus } from "@/components/icons";
+import { TeacherNoteLine } from "@/components/TeacherNote";
 
 export default async function CoursePage({ params }: PageProps<"/courses/[id]">) {
   const { id } = await params;
@@ -28,7 +29,8 @@ const pct = (v: number | null) => (v === null ? "–" : `${Math.round(v)}%`);
 
 async function TeacherCourse({ course, readings }: { course: Course; readings: Reading[] }) {
   const students = await studentsInCourse(course.id);
-  const sessions = await sessionsForReadings(readings.map((r) => r.id));
+  // Enrolled students only: the professor trying a reading themselves isn't part of the class.
+  const sessions = await studentSessionsForReadings(readings.map((r) => r.id));
   const perReading = readings.map((r) => {
     const best = [...bestPerStudent(sessions.filter((s) => s.readingId === r.id)).values()];
     return {
@@ -185,6 +187,7 @@ async function StudentCourse({ course, readings, user }: { course: Course; readi
                         </span>
                       )}
                     </div>
+                    <TeacherNoteLine text={r.instructions} />
                   </div>
                   {overdue && <OverduePill />}
                   <StatusPill session={best} attempts={byReading(r.id).length} />

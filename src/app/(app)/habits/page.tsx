@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth";
 import { coursesForUser, personalReadings, readingsForCourses, sessionsFor } from "@/lib/db";
 import { plural, readingHabits, studentSummary } from "@/lib/insights";
-import { formatDuration } from "@/lib/text";
+import { appDay, formatDuration } from "@/lib/text";
 import type { Reading, Session } from "@/lib/types";
 import { PageHeader } from "@/components/AppShell";
 import { EmptyState, HabitCard, Section, Stat } from "@/components/ui";
@@ -72,14 +72,21 @@ export default async function HabitsPage() {
   );
 }
 
-/** Eyes-on reading minutes per week (Monday start, UTC), oldest first. */
+/** Reading minutes per week (Monday start, Eastern time), oldest first. */
 function weeklyMinutes(sessions: Session[]) {
-  const now = new Date();
-  const monday = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - ((now.getUTCDay() + 6) % 7)));
+  // Calendar days as "YYYY-MM-DD" in Eastern time; day arithmetic on them is done in UTC.
+  const today = new Date(appDay(new Date()) + "T00:00:00Z");
+  const monday = new Date(today.getTime() - ((today.getUTCDay() + 6) % 7) * 864e5);
+  const dayOf = (d: Date) => d.toISOString().slice(0, 10);
   return Array.from({ length: 8 }, (_, i) => {
     const start = new Date(monday.getTime() - (7 - i) * 7 * 864e5);
     const end = new Date(start.getTime() + 7 * 864e5);
-    const min = sessions.filter((s) => s.startedAt >= start.toISOString() && s.startedAt < end.toISOString()).reduce((t, s) => t + s.report.activeSec / 60, 0);
+    const min = sessions
+      .filter((s) => {
+        const day = appDay(s.startedAt);
+        return day >= dayOf(start) && day < dayOf(end);
+      })
+      .reduce((t, s) => t + s.report.activeSec / 60, 0);
     return { label: i === 7 ? "This wk" : start.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" }), min };
   });
 }

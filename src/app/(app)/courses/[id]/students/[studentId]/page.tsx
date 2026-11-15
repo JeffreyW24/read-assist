@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import { requireUser } from "@/lib/auth";
 import { getCourse, getUser, isEnrolled, readingsForCourse, sessionsFor } from "@/lib/db";
 import { bestOf, plural, readingHabits, studentSummary } from "@/lib/insights";
-import { formatDate, formatDueDate, formatDuration } from "@/lib/text";
+import { finishedLate, formatDate, formatDueDate, formatDuration } from "@/lib/text";
 import { PageHeader } from "@/components/AppShell";
 import { EmptyState, HabitCard, OverduePill, Section, Stat, StatusPill, isOverdue } from "@/components/ui";
 
@@ -32,7 +32,7 @@ export default async function StudentInCoursePage({ params }: PageProps<"/course
           </Link>
         }
         title={student.name}
-        subtitle={student.email}
+        subtitle={`Username: ${student.username}`}
       />
 
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-10">
@@ -72,7 +72,7 @@ export default async function StudentInCoursePage({ params }: PageProps<"/course
                         <Link href={`/readings/${r.id}/insights`} className="font-medium hover:text-accent">{r.title}</Link>
                         <div className="text-xs text-muted mt-0.5">
                           {r.dueDate ? `Due ${formatDueDate(r.dueDate)}` : "No due date"}
-                          {b && b.status === "done" && r.dueDate && b.endedAt.slice(0, 10) > r.dueDate.slice(0, 10) ? " · finished late" : ""}
+                          {b && b.status === "done" && finishedLate(b.endedAt, r.dueDate) ? " · finished late" : ""}
                         </div>
                       </td>
                       <td className="px-3 py-3">

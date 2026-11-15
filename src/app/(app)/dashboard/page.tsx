@@ -1,14 +1,15 @@
 import Link from "next/link";
 import { requireUser } from "@/lib/auth";
-import { coursesForUser, personalReadings, readingsForCourses, sessionsFor, sessionsForReadings, studentCounts, webReadingsFor } from "@/lib/db";
+import { coursesForUser, getUser, personalReadings, readingsForCourses, sessionsFor, studentCounts, studentSessionsForReadings, webReadingsFor } from "@/lib/db";
 import { bestOf, bestPerStudent, plural, readingHabits, studentSummary } from "@/lib/insights";
-import { estimateMinutes, formatDate, formatDueDate, formatDuration } from "@/lib/text";
+import { APP_TIME_ZONE, appDay, dueDay, estimateMinutes, formatDate, formatDueDate, formatDuration } from "@/lib/text";
 import type { Reading, Session, User } from "@/lib/types";
 import { PageHeader } from "@/components/AppShell";
 import { CreateCourseForm, JoinCourseForm } from "@/components/CourseForms";
 import { ExtensionSync } from "@/components/ExtensionSync";
 import { BestTag, CoveragePill, EmptyState, HabitCard, OverduePill, RowLink, Section, Stat, StatusPill, isOverdue } from "@/components/ui";
 import { IconBook, IconClock, IconMonitor, IconPlus, IconSparkle, IconUsers } from "@/components/icons";
+import { TeacherNoteLine } from "@/components/TeacherNote";
 
 export default async function Dashboard() {
   const user = await requireUser();
@@ -16,7 +17,7 @@ export default async function Dashboard() {
 }
 
 function greeting() {
-  const h = new Date().getHours();
+  const h = Number(new Intl.DateTimeFormat("en-US", { timeZone: APP_TIME_ZONE, hour: "numeric", hourCycle: "h23" }).format(new Date()));
   return h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening";
 }
 
@@ -95,6 +96,7 @@ async function StudentDashboard({ user }: { user: User }) {
                       </span>
                     )}
                   </div>
+                  <TeacherNoteLine text={reading.instructions} />
                 </div>
                 {isOverdue(reading.dueDate, best) && <OverduePill />}
                 <StatusPill session={best} attempts={attempts} />
@@ -204,9 +206,13 @@ async function ProfessorDashboard({ user }: { user: User }) {
   const courses = await coursesForUser(user);
   const counts = await studentCounts(courses.map((c) => c.id));
   const readings = await readingsForCourses(courses.map((c) => c.id));
-  const sessions = await sessionsForReadings(readings.map((r) => r.id));
+  // Enrolled students only: the professor trying a reading themselves isn't class activity.
+  const sessions = await studentSessionsForReadings(readings.map((r) => r.id));
   const readingById = new Map(readings.map((r) => [r.id, r]));
   const activity = sessions.slice(0, 6);
+  // Who each recent session belongs to (the list is about students, so it has to say which).
+  const studentName = new Map<string, string>();
+  for (const id of new Set(activity.map((s) => s.userId))) studentName.set(id, (await getUser(id))?.name ?? "A student");
 
   // Per course: how far the class is through its readings (best session per student).
   const courseStats = (courseId: string) => {
@@ -214,7 +220,8 @@ async function ProfessorDashboard({ user }: { user: User }) {
     const n = counts.get(courseId) ?? 0;
     let finished = 0;
     for (const r of rs) for (const s of bestPerStudent(sessions.filter((x) => x.readingId === r.id)).values()) if (s.report.coveragePct >= 85) finished++;
-    const next = rs.filter((r) => r.dueDate && r.dueDate.slice(0, 10) >= new Date().toISOString().slice(0, 10))[0] ?? null;
+    const today = appDay(new Date());
+    const next = rs.filter((r) => r.dueDate && dueDay(r.dueDate) >= today)[0] ?? null;
     return { readings: rs.length, students: n, completion: rs.length && n ? Math.round((finished / (rs.length * n)) * 100) : null, next };
   };
 
@@ -268,9 +275,11 @@ async function ProfessorDashboard({ user }: { user: User }) {
             {activity.map((s: Session) => {
               const r = readingById.get(s.readingId)!;
               return (
-                <RowLink key={s.id} href={`/readings/${r.id}/insights`}>
+                <RowLink key={s.id} href={`/reports/${s.id}`}>
                   <div className="min-w-0 flex-1">
-                    <div className="font-medium truncate">{r.title}</div>
+                    <div className="font-medium truncate">
+                      {studentName.get(s.userId)} <span className="text-muted font-normal">· {r.title}</span>
+                    </div>
                     <div className="text-sm text-muted">
                       {formatDate(s.endedAt)} · {formatDuration(s.report.activeSec)} reading ({formatDuration(s.report.durationSec)} session) · focus {Math.round(s.report.focusPct)}%
                     </div>

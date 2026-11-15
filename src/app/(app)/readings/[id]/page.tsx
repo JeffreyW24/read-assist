@@ -8,6 +8,8 @@ import { bestOf } from "@/lib/insights";
 import { PageHeader } from "@/components/AppShell";
 import { BestTag, EmptyState, isOverdue, OverduePill, RowLink, Section, StatusPill } from "@/components/ui";
 import { IconCamera, IconEye, IconSun, IconUsers } from "@/components/icons";
+import { TeacherNote } from "@/components/TeacherNote";
+import { EditReadingDetails } from "@/components/EditReadingDetails";
 
 export default async function ReadingPage({ params, searchParams }: PageProps<"/readings/[id]">) {
   const { id } = await params;
@@ -19,6 +21,8 @@ export default async function ReadingPage({ params, searchParams }: PageProps<"/
   const isProf = course?.professorId === user.id;
   const sessions = await sessionsFor(user.id, reading.id);
   const best = bestOf(sessions);
+  // All of this student's reading time on this text, over every session and sitting.
+  const totalReadingSec = sessions.reduce((t, s) => t + s.report.activeSec, 0);
   const paused = sessions.find((s) => s.status === "paused") ?? null;
   const minutesLeft = paused ? Math.max(1, Math.round(((100 - paused.report.coveragePct) / 100) * reading.wordCount * SEC_PER_WORD / 60)) : 0;
   // Only students get the overdue flag (it's about their own progress).
@@ -55,12 +59,8 @@ export default async function ReadingPage({ params, searchParams }: PageProps<"/
         }
       />
 
-      {reading.instructions && (
-        <div className="mb-6 rounded-xl border border-border bg-accent-soft px-5 py-4 text-[15px]">
-          <span className="font-semibold">From your professor: </span>
-          {reading.instructions}
-        </div>
-      )}
+      {isProf && <EditReadingDetails readingId={reading.id} title={reading.title} dueDate={reading.dueDate} instructions={reading.instructions} />}
+      {course && <TeacherNote text={reading.instructions} className="mb-6" />}
 
       {justPaused && paused && (
         <div className="mb-6 rounded-xl border border-border px-5 py-4 text-[15px] fade-in" style={{ background: "var(--read-soft, var(--accent-soft))" }}>
@@ -118,7 +118,16 @@ export default async function ReadingPage({ params, searchParams }: PageProps<"/
         <p className="font-serif text-[17px] leading-8 text-muted line-clamp-4">{preview}</p>
       </Section>
 
-      <Section title="Your sessions">
+      <Section
+        title="Your sessions"
+        action={
+          sessions.length > 0 && (
+            <span className="text-sm text-muted" title="Time reading this text, added up over all your sessions. Stretches of more than 5 minutes without reading aren't counted.">
+              Total reading time: <b className="text-fg">{formatDuration(totalReadingSec)}</b>
+            </span>
+          )
+        }
+      >
         {sessions.length === 0 ? (
           <EmptyState>No sessions yet. Your first report will appear here.</EmptyState>
         ) : (

@@ -1,6 +1,10 @@
 import { getCurrentUser } from "@/lib/auth";
+import { takeAiCall } from "@/lib/db";
 import { pdfToText } from "@/lib/pdf";
 import { cleanExtractedText } from "@/lib/gemini";
+
+// AI clean-up goes through a long PDF in chunks (see cleanExtractedText), which takes a while.
+export const maxDuration = 300;
 
 export async function POST(req: Request) {
   const user = await getCurrentUser();
@@ -19,7 +23,7 @@ export async function POST(req: Request) {
     let finalText = text;
     let cleanedByAi = false;
     if (useAi) {
-      const cleaned = await cleanExtractedText(text);
+      const cleaned = await cleanExtractedText(text, () => takeAiCall(user.id));
       if (cleaned) {
         finalText = cleaned;
         cleanedByAi = true;

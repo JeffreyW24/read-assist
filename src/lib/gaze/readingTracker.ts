@@ -7,6 +7,7 @@
 // At the end it turns all of that into a SessionReport.
 import type { FaceFrame } from "./faceTracker";
 import { LineHmm, type LineBox } from "./lineHmm";
+import { activeReadingSec } from "../readingTime";
 import type {
   CoverageStatus,
   DistractionEvent,
@@ -970,8 +971,9 @@ export class ReadingTracker {
       if (p.rereads === 0 && p.status === "read" && p.words >= 8 && p.dwellSec / p.expectedSec >= Math.max(1, typical * 1.6)) p.rereads = 1;
     }
 
-    const distractedSec = distractions.reduce((s, d) => s + d.durationSec, 0);
-    const activeSec = Math.max(0, t - distractedSec);
+    // Reading time: distractions don't count, and neither does any stretch of more than
+    // IDLE_CUTOFF_SEC without reading (see activeReadingSec).
+    const activeSec = Math.min(t, activeReadingSec(segments));
     const avgWpm = readWords >= 30 && readDwell > 0 ? Math.round(Math.min(1200, Math.max(40, readWords / (readDwell / 60)))) : null;
 
     // merge tiny timeline segments for a clean chart

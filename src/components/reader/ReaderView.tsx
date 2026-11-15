@@ -2,7 +2,7 @@
 // The distraction-free reader. Text is laid out in CSS columns where each column is
 // one "page" (no scrolling). We measure where every line sits on screen so the
 // tracker can match your gaze to lines.
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { isHeading, splitWords } from "@/lib/text";
 import type { FaceTracker } from "@/lib/gaze/faceTracker";
 import type { WebEyeTrackSource } from "@/lib/gaze/webEyeTrackSource";
@@ -110,6 +110,8 @@ export function ReaderView({
   const [chromeVisible, setChromeVisible] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [confirmFinish, setConfirmFinish] = useState(false);
+  // The account's dyslexia font (Settings) replaces every reader font, so the picker would do nothing.
+  const dyslexiaFont = useSyncExternalStore(noSubscribe, () => document.documentElement.dataset.font === "dyslexic", () => false);
   const [recalibrating, setRecalibrating] = useState(false);
   const [theme, setTheme] = useTheme();
 
@@ -645,7 +647,11 @@ export function ReaderView({
               options={[["system", "Auto"], ["light", "Light"], ["dark", "Dark"], ["sepia", "Sepia"]]}
               onChange={(v) => setTheme(v as ThemeChoice)}
             />
-            <Seg label="Font" value={prefs.font} options={[["serif", "Serif"], ["sans", "Sans"], ["hyper", "Legible"]]} onChange={(v) => setPrefs({ ...prefs, font: v as ReaderPrefs["font"] })} />
+            {dyslexiaFont ? (
+              <p className="text-xs text-muted">Font: dyslexia-friendly (change it in Settings).</p>
+            ) : (
+              <Seg label="Font" value={prefs.font} options={[["serif", "Serif"], ["sans", "Sans"], ["hyper", "Legible"]]} onChange={(v) => setPrefs({ ...prefs, font: v as ReaderPrefs["font"] })} />
+            )}
             <Seg label="Text size" value={prefs.size} options={[["s", "A"], ["m", "A+"], ["l", "A++"]]} onChange={(v) => setPrefs({ ...prefs, size: v as ReaderPrefs["size"] })} />
             <Toggle
               label="Reading aids"
@@ -865,3 +871,6 @@ function Toggle({
     </label>
   );
 }
+
+/** The dyslexia-font setting can't change while reading (it's set on another page). */
+const noSubscribe = () => () => {};

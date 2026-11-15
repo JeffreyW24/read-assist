@@ -1,7 +1,9 @@
 "use client";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import Link from "next/link";
 import type { Role } from "@/lib/types";
+import { RecoveryCodeCard } from "@/components/RecoveryCodeCard";
 
 type Mode = "signin" | "signup";
 interface Demo {
@@ -15,18 +17,32 @@ export function LoginForm({ demos }: { demos: Demo[] }) {
   const [mode, setMode] = useState<Mode>("signin");
   const [role, setRole] = useState<Role>("student");
   const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  // Set right after sign-up: the new account's recovery code, shown before going on.
+  const [recoveryCode, setRecoveryCode] = useState<string | null>(null);
 
   async function post(url: string, body: unknown) {
     setBusy(true);
     setError("");
-    const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    let res: Response;
+    try {
+      res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    } catch {
+      setError("Couldn't reach the server. Check your connection and try again.");
+      setBusy(false);
+      return;
+    }
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
       setError(data.error ?? "Something went wrong.");
+      setBusy(false);
+      return;
+    }
+    if (typeof data.recoveryCode === "string") {
+      setRecoveryCode(data.recoveryCode);
       setBusy(false);
       return;
     }
@@ -36,9 +52,26 @@ export function LoginForm({ demos }: { demos: Demo[] }) {
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (mode === "signin") void post("/api/auth/login", { email, password });
-    else void post("/api/auth/signup", { name, email, password, role });
+    if (mode === "signin") void post("/api/auth/login", { username, password });
+    else void post("/api/auth/signup", { name, username, password, role });
   }
+
+  if (recoveryCode)
+    return (
+      <div>
+        <h1 className="text-2xl font-semibold tracking-tight mb-4">Save your recovery code</h1>
+        <RecoveryCodeCard
+          code={recoveryCode}
+          username={username.trim().toLowerCase()}
+          intro="Your account is ready. If you ever forget your password, you'll need this code to set a new one."
+          doneLabel="Go to my dashboard"
+          onDone={() => {
+            router.push("/dashboard");
+            router.refresh();
+          }}
+        />
+      </div>
+    );
 
   return (
     <div>
@@ -72,8 +105,21 @@ export function LoginForm({ demos }: { demos: Demo[] }) {
           </>
         )}
         <div>
-          <label className="label" htmlFor="email">Email</label>
-          <input id="email" type="email" required className="input" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="alex@school.edu" autoComplete="email" />
+          <label className="label" htmlFor="username">Username</label>
+          <input
+            id="username"
+            required
+            className="input"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            placeholder={mode === "signup" ? "e.g. alex.chen" : ""}
+            autoComplete="username"
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+            maxLength={mode === "signup" ? 30 : 200}
+          />
+          {mode === "signup" && <p className="text-xs text-muted mt-1">3–30 letters or numbers; you can also use . _ -</p>}
         </div>
         <div>
           <label className="label" htmlFor="password">Password</label>
@@ -90,6 +136,11 @@ export function LoginForm({ demos }: { demos: Demo[] }) {
           />
         </div>
         {error && <p className="text-sm text-skip">{error}</p>}
+        {mode === "signin" && (
+          <p className="text-right -mt-1">
+            <Link href="/forgot-password" className="text-sm text-accent hover:underline">Forgot password?</Link>
+          </p>
+        )}
         <button className="btn btn-primary w-full !py-2.5" disabled={busy}>
           {busy ? "One moment…" : mode === "signin" ? "Sign in" : "Create account"}
         </button>

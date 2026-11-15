@@ -1,7 +1,7 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import type { User } from "@/lib/types";
-import { Logo } from "./icons";
+import { IconSettings, Logo } from "./icons";
 import { ThemeToggle } from "./ThemeToggle";
 import { LogoutButton } from "./LogoutButton";
 
@@ -28,6 +28,9 @@ export function AppShell({ user, children }: { user: User; children: ReactNode }
           </nav>
           <div className="ml-auto flex items-center gap-2">
             <ThemeToggle />
+            <Link href="/settings" className="btn btn-ghost !px-2.5 !py-1.5 text-muted" aria-label="Settings" title="Settings">
+              <IconSettings size={17} />
+            </Link>
             <div className="hidden sm:flex flex-col items-end leading-tight px-2">
               <span className="text-sm font-medium">{user.name}</span>
               <span className="text-[11px] text-muted">{user.role === "professor" ? "Teacher" : "Student"}</span>

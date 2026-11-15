@@ -1,5 +1,5 @@
 import { getCurrentUser } from "@/lib/auth";
-import { getReading, getSession, saveSessionAi } from "@/lib/db";
+import { getReading, getSession, saveSessionAi, takeAiCall } from "@/lib/db";
 import { generateSessionAi, geminiConfigured } from "@/lib/gemini";
 
 // "Try again" for a report whose AI summary failed (Gemini was slow or unreachable when the
@@ -15,7 +15,7 @@ export async function POST(_req: Request, ctx: RouteContext<"/api/sessions/[id]/
   if (!geminiConfigured()) return Response.json({ error: "AI summaries aren't set up on this server." }, { status: 400 });
   const reading = await getReading(session.readingId);
   if (!reading) return Response.json({ error: "Reading not found." }, { status: 404 });
-  const ai = await generateSessionAi(reading, session.report);
+  const ai = await generateSessionAi(reading, session.report, () => takeAiCall(user.id));
   if (ai.generatedBy !== "gemini") return Response.json({ error: "The AI summary still couldn't be created. Try again in a minute." }, { status: 502 });
   await saveSessionAi(session.id, ai);
   return Response.json({ ok: true, generatedBy: "gemini" });

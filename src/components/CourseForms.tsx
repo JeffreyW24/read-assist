@@ -2,6 +2,7 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { IconPlus } from "./icons";
+import { errorMessage, jsonBody } from "@/lib/http";
 
 export function JoinCourseForm() {
   const router = useRouter();
@@ -20,13 +21,18 @@ export function JoinCourseForm() {
       onSubmit={async (e) => {
         e.preventDefault();
         setMsg("");
-        const res = await fetch("/api/courses/join", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ joinCode: code }),
-        });
-        const data = await res.json();
-        if (!res.ok) return setMsg(data.error);
+        let res: Response;
+        try {
+          res = await fetch("/api/courses/join", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ joinCode: code }),
+          });
+        } catch {
+          return setMsg("Couldn't reach the server. Check your connection and try again.");
+        }
+        const data = await jsonBody(res);
+        if (!res.ok) return setMsg(errorMessage(res, data, "Couldn't join that course."));
         setOpen(false);
         setCode("");
         router.refresh();
@@ -66,13 +72,18 @@ export function CreateCourseForm() {
         onClick={(e) => e.stopPropagation()}
         onSubmit={async (e) => {
           e.preventDefault();
-          const res = await fetch("/api/courses", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ name, code, term }),
-          });
-          const data = await res.json();
-          if (!res.ok) return setMsg(data.error);
+          let res: Response;
+          try {
+            res = await fetch("/api/courses", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ name, code, term }),
+            });
+          } catch {
+            return setMsg("Couldn't reach the server. Check your connection and try again.");
+          }
+          const data = await jsonBody(res);
+          if (!res.ok) return setMsg(errorMessage(res, data, "Couldn't create the course."));
           router.push(`/courses/${data.course.id}`);
           router.refresh();
         }}

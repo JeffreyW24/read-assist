@@ -2,22 +2,23 @@
 import { useState } from "react";
 import type { LessonPlan } from "@/lib/types";
 import { IconSparkle } from "@/components/icons";
+import { errorMessage, jsonBody } from "@/lib/http";
 
 /** Teacher's AI lesson plan for the next class, built from how students read this. */
 export function LessonPlanCard({
   readingId,
   initial,
   hasSessions,
-  newSessions,
+  changedStudents,
 }: {
   readingId: string;
   initial: LessonPlan | null;
   hasSessions: boolean;
-  /** Students who have read it since the plan was made. */
-  newSessions: number;
+  /** Students whose reading changed after the plan was made (it doesn't include that yet). */
+  changedStudents: number;
 }) {
   const [plan, setPlan] = useState(initial);
-  const [staleBy, setStaleBy] = useState(newSessions);
+  const [staleBy, setStaleBy] = useState(changedStudents);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
@@ -25,10 +26,16 @@ export function LessonPlanCard({
   async function generate() {
     setBusy(true);
     setError("");
-    const res = await fetch(`/api/readings/${readingId}/lesson-plan`, { method: "POST" });
-    const data = await res.json();
+    let res: Response;
+    try {
+      res = await fetch(`/api/readings/${readingId}/lesson-plan`, { method: "POST" });
+    } catch {
+      setBusy(false);
+      return setError("Couldn't reach the server. Check your connection and try again.");
+    }
+    const data = await jsonBody(res);
     setBusy(false);
-    if (!res.ok) return setError(data.error ?? "Failed");
+    if (!res.ok) return setError(errorMessage(res, data, "Couldn't make the lesson plan."));
     setPlan(data.plan);
     setStaleBy(0);
   }
@@ -62,14 +69,15 @@ export function LessonPlanCard({
       </div>
       {plan && staleBy > 0 && (
         <div className="mt-3 rounded-lg px-3 py-2 text-sm" style={{ background: "var(--skim-soft)" }}>
-          <b>{staleBy} more student{staleBy === 1 ? " has" : "s have"} read it</b> since this plan was made. Regenerate to include them.
+          <b>Out of date:</b> {staleBy} student{staleBy === 1 ? "'s" : "s'"} reading has changed since this plan was made. Regenerate to include{" "}
+          {staleBy === 1 ? "it" : "them"}.
         </div>
       )}
       {plan ? (
         <>
           <div className="mt-4 text-[15px] leading-relaxed whitespace-pre-line">{plan.text}</div>
           <p className="text-[11px] text-faint mt-4">
-            {plan.generatedBy === "gemini" ? "Written by Google Gemini" : "Template plan (no Gemini key configured)"} from {plan.basedOnSessions} student
+            {plan.generatedBy === "gemini" ? "Written by Google Gemini" : "Template plan, not written by AI,"} from {plan.basedOnSessions} student
             {plan.basedOnSessions === 1 ? "" : "s"}&apos; reading data.
           </p>
         </>

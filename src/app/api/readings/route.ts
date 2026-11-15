@@ -1,7 +1,7 @@
 import { getCurrentUser } from "@/lib/auth";
 import { createReading, getCourse } from "@/lib/db";
 import { dueDateFromInput, toParagraphs } from "@/lib/text";
-import { readJsonBody, strField } from "@/lib/validate";
+import { MAX_INSTRUCTIONS_CHARS, readJsonBody, strField } from "@/lib/validate";
 
 // About 150,000 words: far more than any single assignment, small enough to keep pages fast.
 const MAX_TEXT_CHARS = 1_000_000;
@@ -9,8 +9,8 @@ const MAX_TEXT_CHARS = 1_000_000;
 export async function POST(req: Request) {
   const user = await getCurrentUser();
   if (!user) return Response.json({ error: "Sign in first." }, { status: 401 });
-  const raw = await readJsonBody(req);
-  if (!raw) return Response.json({ error: "That request wasn't understood. Reload the page and try again." }, { status: 400 });
+  const raw = await readJsonBody(req, MAX_TEXT_CHARS + 100_000);
+  if (!raw) return Response.json({ error: "That request wasn't understood (or the reading is too long). Reload the page and try again." }, { status: 400 });
   const body = {
     title: strField(raw, "title"),
     text: strField(raw, "text") ?? "",
@@ -25,6 +25,9 @@ export async function POST(req: Request) {
   if (!body.title?.trim()) return Response.json({ error: "Give the reading a title." }, { status: 400 });
   if (paragraphs.length === 0) return Response.json({ error: "The reading has no text." }, { status: 400 });
 
+  const dueDate = body.dueDate ? dueDateFromInput(body.dueDate) : null;
+  if (body.dueDate && !dueDate) return Response.json({ error: "That due date isn't a real date." }, { status: 400 });
+
   let courseId: string | null = null;
   if (body.courseId) {
     const course = await getCourse(body.courseId);
@@ -38,8 +41,8 @@ export async function POST(req: Request) {
     paragraphs,
     ownerId: user.id,
     courseId,
-    dueDate: body.dueDate ? dueDateFromInput(body.dueDate) : null,
-    instructions: body.instructions?.trim() ?? "",
+    dueDate,
+    instructions: body.instructions?.trim().slice(0, MAX_INSTRUCTIONS_CHARS) ?? "",
     source: body.source === "pdf" || body.source === "image" ? body.source : "paste",
   });
   return Response.json({ reading });

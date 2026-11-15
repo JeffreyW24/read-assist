@@ -1,11 +1,14 @@
-// Sign-in. Real accounts use an email + password (hashed with scrypt, never stored as-is).
+// Sign-in. Real accounts use a username + password (hashed with scrypt, never stored as-is).
 // Demo accounts (the seeded professor/student and anyone from the old demo) sign in with one click.
-// We remember who you are with a signed cookie: "<userId>.<signature>", so it can't be forged.
+// We remember who you are with a signed cookie, "<sessionId>.<signature>", naming a sign-in
+// session stored on the server. It can't be forged, and signing out (or changing the password)
+// deletes the session, so a copied cookie stops working too.
 import { createHmac, randomBytes, scrypt as scryptCb, timingSafeEqual } from "node:crypto";
 import { promisify } from "node:util";
 import { cookies } from "next/headers";
+import { cache } from "react";
 import { redirect } from "next/navigation";
-import { getOrCreateSecret, getUser } from "./db";
+import { createAuthSession, deleteAuthSession, deleteAuthSessionsForUser, getOrCreateSecret, userForAuthSession } from "./db";
 import type { User } from "./types";
 
 export const SESSION_COOKIE = "ra_session";
@@ -15,19 +18,27 @@ async function secret(): Promise<string> {
   return process.env.AUTH_SECRET || (await getOrCreateSecret());
 }
 
-async function sign(userId: string): Promise<string> {
-  const mac = createHmac("sha256", await secret()).update(userId).digest("base64url");
-  return `${userId}.${mac}`;
+async function sign(sessionId: string): Promise<string> {
+  const mac = createHmac("sha256", await secret()).update(sessionId).digest("base64url");
+  return `${sessionId}.${mac}`;
 }
 
+/** The session id in a cookie, if its signature is right (it may still be signed out: see userForAuthSession). */
 async function verify(token: string | undefined): Promise<string | null> {
   if (!token) return null;
   const dot = token.lastIndexOf(".");
   if (dot <= 0) return null;
-  const userId = token.slice(0, dot);
-  const expected = Buffer.from(await sign(userId));
+  const sessionId = token.slice(0, dot);
+  const expected = Buffer.from(await sign(sessionId));
   const given = Buffer.from(token);
-  return expected.length === given.length && timingSafeEqual(expected, given) ? userId : null;
+  return expected.length === given.length && timingSafeEqual(expected, given) ? sessionId : null;
+}
+
+const MAX_AGE_SEC = 60 * 60 * 24 * 30;
+
+/** The id of the sign-in session this request carries (valid signature), or null. */
+export async function currentSessionId(): Promise<string | null> {
+  return verify((await cookies()).get(SESSION_COOKIE)?.value);
 }
 
 export async function hashPassword(pw: string): Promise<string> {
@@ -45,26 +56,36 @@ export async function checkPassword(pw: string, stored: string): Promise<boolean
 }
 
 /** Call from a route handler after a successful sign-in / sign-up. */
-export async function startSession(userId: string) {
+export async function startSession(userId: string): Promise<string> {
+  const sessionId = await createAuthSession(userId, MAX_AGE_SEC);
   const store = await cookies();
-  store.set(SESSION_COOKIE, await sign(userId), {
+  store.set(SESSION_COOKIE, await sign(sessionId), {
     httpOnly: true,
     sameSite: "lax",
     secure: process.env.NODE_ENV === "production",
     path: "/",
-    maxAge: 60 * 60 * 24 * 30,
+    maxAge: MAX_AGE_SEC,
   });
+  return sessionId;
 }
 
+/** Sign out this browser: the session is deleted on the server, not just the cookie. */
 export async function endSession() {
+  const sessionId = await currentSessionId();
+  if (sessionId) await deleteAuthSession(sessionId);
   (await cookies()).delete(SESSION_COOKIE);
 }
 
-export async function getCurrentUser(): Promise<User | null> {
-  const store = await cookies();
-  const id = await verify(store.get(SESSION_COOKIE)?.value);
-  return id ? getUser(id) : null;
+/** Sign a user out on every device, keeping (optionally) the browser making this request. */
+export async function endOtherSessions(userId: string, keepCurrent: boolean) {
+  await deleteAuthSessionsForUser(userId, keepCurrent ? await currentSessionId() : null);
 }
+
+/** The signed-in user. Looked up once per request, however many layouts and pages ask. */
+export const getCurrentUser = cache(async (): Promise<User | null> => {
+  const sessionId = await currentSessionId();
+  return sessionId ? userForAuthSession(sessionId) : null;
+});
 
 /** Use in pages: sends signed-out visitors to /login. */
 export async function requireUser(): Promise<User> {

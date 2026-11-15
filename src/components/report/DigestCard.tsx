@@ -2,30 +2,37 @@
 import { useState } from "react";
 import type { ClassDigest } from "@/lib/types";
 import { IconSparkle } from "@/components/icons";
+import { errorMessage, jsonBody } from "@/lib/http";
 
 export function DigestCard({
   readingId,
   initial,
   hasSessions,
-  newSessions,
+  changedStudents,
 }: {
   readingId: string;
   initial: ClassDigest | null;
   hasSessions: boolean;
-  /** Sessions finished after this digest was written (it doesn't include them yet). */
-  newSessions: number;
+  /** Students whose reading changed after this digest was written (it doesn't include that yet). */
+  changedStudents: number;
 }) {
   const [digest, setDigest] = useState(initial);
-  const [staleBy, setStaleBy] = useState(newSessions);
+  const [staleBy, setStaleBy] = useState(changedStudents);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   async function generate() {
     setBusy(true);
     setError("");
-    const res = await fetch(`/api/readings/${readingId}/digest`, { method: "POST" });
-    const data = await res.json();
+    let res: Response;
+    try {
+      res = await fetch(`/api/readings/${readingId}/digest`, { method: "POST" });
+    } catch {
+      setBusy(false);
+      return setError("Couldn't reach the server. Check your connection and try again.");
+    }
+    const data = await jsonBody(res);
     setBusy(false);
-    if (!res.ok) return setError(data.error ?? "Failed");
+    if (!res.ok) return setError(errorMessage(res, data, "Couldn't make the summary."));
     setDigest(data.digest);
     setStaleBy(0);
   }
@@ -49,15 +56,15 @@ export function DigestCard({
           className="mt-3 rounded-lg px-3 py-2 text-sm"
           style={{ background: "var(--skim-soft)", color: "var(--fg)" }}
         >
-          <b>Out of date:</b> {staleBy} new session{staleBy === 1 ? "" : "s"} since this digest was written. Click Refresh to include{" "}
-          {staleBy === 1 ? "it" : "them"}.
+          <b>Out of date:</b> {staleBy} student{staleBy === 1 ? "'s" : "s'"} reading has changed since this digest was written. Click Refresh to
+          include {staleBy === 1 ? "it" : "them"}.
         </div>
       )}
       {digest ? (
         <>
           <p className="mt-3 text-[15px] leading-relaxed whitespace-pre-line">{digest.text}</p>
           <p className="text-[11px] text-faint mt-3">
-            {digest.generatedBy === "gemini" ? "Written by Google Gemini from class reading data." : "Basic summary (no Gemini key configured)."}{" "}
+            {digest.generatedBy === "gemini" ? "Written by Google Gemini from class reading data." : "Basic summary, not written by AI."}{" "}
             {/* server and browser may format times differently; the browser's version wins */}
             <span suppressHydrationWarning>
               Written {new Date(digest.createdAt).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}.

@@ -1,18 +1,22 @@
 // Combines many students' sessions into class-level numbers for the professor view.
 import type { Reading, Session, User } from "./types";
 import type { ClassParagraphAggregate } from "./gemini";
+import { finishedLate } from "./text";
 
 /**
- * A student's progress on a reading is their BEST session (highest coverage; ties go to the
- * most recent). A short re-read later shouldn't make progress look like it went backwards.
+ * A student's progress on a reading is their BEST session: highest coverage; on a tie a
+ * finished session beats one that's paused partway, then the most recent wins. A short
+ * re-read (or a new attempt just started) shouldn't make progress look like it went backwards.
  */
 export function bestOf(sessions: Session[]): Session | null {
   let best: Session | null = null;
+  const done = (s: Session) => (s.status === "paused" ? 0 : 1);
   for (const s of sessions) {
     if (
       !best ||
       s.report.coveragePct > best.report.coveragePct ||
-      (s.report.coveragePct === best.report.coveragePct && s.endedAt > best.endedAt)
+      (s.report.coveragePct === best.report.coveragePct &&
+        (done(s) > done(best) || (done(s) === done(best) && s.endedAt > best.endedAt)))
     )
       best = s;
   }
@@ -38,18 +42,39 @@ export function attemptsPerStudent(sessions: Session[]): Map<string, number> {
   return map;
 }
 
+/**
+ * The last paragraph a session got to. A finished session covers the whole reading (anything
+ * it didn't read was skipped). A paused one only got as far as the last paragraph read or
+ * skimmed so far: what comes after isn't skipped, the student just hasn't reached it yet.
+ */
+export function reachedUpTo(s: Session): number {
+  if (s.status !== "paused") return Infinity;
+  let last = -1;
+  s.report.paragraphs.forEach((p, i) => {
+    if (p.status !== "skipped") last = i;
+  });
+  return last;
+}
+
+/**
+ * Class numbers per paragraph, over the students who have reached it (see reachedUpTo), so
+ * students still partway through don't make the rest of the reading look skipped.
+ */
 export function aggregateParagraphs(reading: Reading, sessions: Session[]): ClassParagraphAggregate[] {
-  const n = sessions.length || 1;
+  const reach = sessions.map(reachedUpTo);
   return reading.paragraphs.map((text, index) => {
-    let skipped = 0, skimmed = 0, rereads = 0, ratio = 0;
-    for (const s of sessions) {
+    let skipped = 0, skimmed = 0, rereads = 0, ratio = 0, readers = 0;
+    for (let k = 0; k < sessions.length; k++) {
+      const s = sessions[k];
       const p = s.report.paragraphs[index];
-      if (!p) continue;
+      if (!p || index > reach[k]) continue;
+      readers++;
       if (p.status === "skipped") skipped++;
       if (p.status === "skimmed") skimmed++;
       rereads += p.rereads;
       ratio += p.expectedSec > 0 ? p.dwellSec / p.expectedSec : 0;
     }
+    const n = readers || 1;
     return {
       index,
       text,
@@ -57,6 +82,7 @@ export function aggregateParagraphs(reading: Reading, sessions: Session[]): Clas
       skimmedPct: (skimmed / n) * 100,
       avgRereads: rereads / n,
       avgDwellRatio: ratio / n,
+      readers,
     };
   });
 }
@@ -97,7 +123,7 @@ export function studentSummary(readings: Reading[], sessions: Session[]): Studen
   const started = bests.filter((b) => b.best);
   const finished = started.filter((b) => b.best!.report.coveragePct >= 85);
   const withDue = readings.filter((r) => r.dueDate);
-  const onTime = finished.filter((b) => b.r.dueDate && b.best!.endedAt.slice(0, 10) <= b.r.dueDate.slice(0, 10));
+  const onTime = finished.filter((b) => b.r.dueDate && !finishedLate(b.best!.endedAt, b.r.dueDate));
   return {
     assigned: readings.length,
     started: started.length,
@@ -252,6 +278,18 @@ export function readingHabits(sessions: Session[], readingsById: Map<string, Rea
   const avgCov = mean(done.map((s) => s.report.coveragePct))!;
   if (avgCov >= 85) habits.push({ id: "thorough", title: "You read thoroughly", detail: `Your sessions average ${Math.round(avgCov)}% coverage.`, tone: "good" });
   return habits;
+}
+
+/**
+ * Students whose data changed after `sinceIso` (their best session is newer, or was continued
+ * since). Used to say an AI class summary or lesson plan is out of date.
+ */
+export function studentsChangedSince(best: Map<string, Session>, sinceIso: string): number {
+  let n = 0;
+  best.forEach((s) => {
+    if (s.endedAt > sinceIso) n++;
+  });
+  return n;
 }
 
 /** Total eyes-on reading time per student across ALL their sessions (not just the best one). */

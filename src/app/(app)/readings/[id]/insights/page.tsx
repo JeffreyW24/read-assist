@@ -1,8 +1,8 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireUser } from "@/lib/auth";
-import { getCourse, getDigest, getLessonPlan, getReading, sessionsForReading, studentsInCourse } from "@/lib/db";
-import { aggregateParagraphs, attemptsPerStudent, bestPerStudent, plural, totalEyesOnPerStudent } from "@/lib/insights";
+import { getCourse, getDigest, getLessonPlan, getReading, studentSessionsForReading, studentsInCourse } from "@/lib/db";
+import { aggregateParagraphs, attemptsPerStudent, bestPerStudent, plural, studentsChangedSince, totalEyesOnPerStudent } from "@/lib/insights";
 import { formatDate, formatDuration, isHeading } from "@/lib/text";
 import { PageHeader } from "@/components/AppShell";
 import { EmptyState, Section, Stat, StatusPill } from "@/components/ui";
@@ -19,7 +19,8 @@ export default async function InsightsPage({ params }: PageProps<"/readings/[id]
   const students = await studentsInCourse(course.id);
   // One session per student: their BEST attempt (highest coverage), so a short re-read
   // doesn't drag the class numbers down. All stats below are labelled accordingly.
-  const allSessions = await sessionsForReading(reading.id);
+  // Enrolled students only: the professor trying the reading themselves isn't part of the class.
+  const allSessions = await studentSessionsForReading(reading.id);
   const best = bestPerStudent(allSessions);
   const attempts = attemptsPerStudent(allSessions);
   const sessions = [...best.values()];
@@ -39,7 +40,8 @@ export default async function InsightsPage({ params }: PageProps<"/readings/[id]
   const withSpeed = sessions.filter((s) => s.report.avgWpm !== null).length;
   // Every average below covers only the students who have started (not-started students aren't 0%).
   const scope = `best session · ${plural(best.size, "student")} who started`;
-  const maxRereads = Math.max(0.0001, ...agg.map((a) => a.avgRereads));
+  // reduce, not Math.max(...list): spreading a very long reading's paragraphs overflows the stack.
+  const maxRereads = agg.reduce((m, a) => Math.max(m, a.avgRereads), 0.0001);
 
   return (
     <div className="max-w-5xl">
@@ -75,13 +77,13 @@ export default async function InsightsPage({ params }: PageProps<"/readings/[id]
           readingId={reading.id}
           initial={plan}
           hasSessions={sessions.length > 0}
-          newSessions={plan ? Math.max(0, sessions.length - plan.basedOnSessions) : 0}
+          changedStudents={plan ? studentsChangedSince(best, plan.createdAt) : 0}
         />
         <DigestCard
           readingId={reading.id}
           initial={digest}
           hasSessions={sessions.length > 0}
-          newSessions={digest ? allSessions.filter((s) => s.endedAt > digest.createdAt).length : 0}
+          changedStudents={digest ? studentsChangedSince(best, digest.createdAt) : 0}
         />
       </div>
 
@@ -183,6 +185,11 @@ export default async function InsightsPage({ params }: PageProps<"/readings/[id]
                   {!heading && (
                     <div className="text-xs text-muted space-y-1 pt-1 tabular-nums">
                       <div>¶{a.index + 1}</div>
+                      {a.readers < sessions.length && (
+                        <div title="Students still partway through only count for the parts they've reached">
+                          {a.readers} of {sessions.length} reached it
+                        </div>
+                      )}
                       <div>{Math.round(a.skippedPct)}% skipped</div>
                       <div>{Math.round(a.skimmedPct)}% skimmed</div>
                       <div style={{ color: a.avgRereads >= 1 ? "var(--reread)" : undefined }}>{a.avgRereads.toFixed(1)} re-reads/student</div>

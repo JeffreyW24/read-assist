@@ -56,31 +56,66 @@ export function formatDuration(sec: number): string {
  * matter their timezone (older entries saved at midnight UTC also show the right day).
  */
 export function formatDueDate(iso: string | null): string {
-  if (!iso) return "";
+  if (!iso || !isValidDate(iso)) return "";
   return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" });
 }
 
 /**
- * Is a due date in the past? Compares calendar days: the due day (its UTC date, see
- * formatDueDate) against today's local date. A reading due today is not overdue yet.
+ * The app's time zone: US Eastern (EST, or EDT in summer). "Today", "finished on time" and the
+ * dates shown on pages all use it, so the server (which runs in UTC) and every student agree on
+ * which day it is. A reading due Nov 20 is on time until 11:59 pm Eastern on Nov 20.
+ */
+export const APP_TIME_ZONE = "America/New_York";
+
+/** Can this be read as a real date? (A bad one must never crash a page.) */
+export function isValidDate(v: string | Date): boolean {
+  return !Number.isNaN((typeof v === "string" ? new Date(v) : v).getTime());
+}
+
+const dayFormat = new Intl.DateTimeFormat("en-CA", { timeZone: APP_TIME_ZONE, year: "numeric", month: "2-digit", day: "2-digit" });
+
+/** The calendar day ("2026-11-20") a moment falls on, in Eastern time; "" if it isn't a real date. */
+export function appDay(moment: string | Date): string {
+  const d = typeof moment === "string" ? new Date(moment) : moment;
+  return isValidDate(d) ? dayFormat.format(d) : "";
+}
+
+/** The calendar day a reading is due ("2026-11-20"); see formatDueDate for how it's stored. "" if unreadable. */
+export function dueDay(dueIso: string): string {
+  const d = new Date(dueIso);
+  return isValidDate(d) ? d.toISOString().slice(0, 10) : "";
+}
+
+/** Was something finished (at `endedIso`) after its due day ended, in Eastern time? */
+export function finishedLate(endedIso: string, dueIso: string | null): boolean {
+  if (!dueIso) return false;
+  const due = dueDay(dueIso), ended = appDay(endedIso);
+  return !!due && !!ended && ended > due;
+}
+
+/**
+ * Is a due date in the past? Compares calendar days: the due day against today in Eastern
+ * time. A reading due today is not overdue yet.
  */
 export function isPastDue(dueIso: string | null, now = new Date()): boolean {
-  if (!dueIso) return false;
-  const dueDay = new Date(dueIso).toISOString().slice(0, 10);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
-  return today > dueDay;
+  const due = dueIso ? dueDay(dueIso) : "";
+  return !!due && appDay(now) > due;
 }
 
 /** Turn a date-input value ("2026-11-20") into the stored due date (noon UTC that day). */
 export function dueDateFromInput(value: string): string | null {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.trim());
-  if (m) return `${m[1]}-${m[2]}-${m[3]}T12:00:00.000Z`;
+  if (m) {
+    // Only real calendar days: "2026-02-31" isn't one (Date would quietly make it Mar 3).
+    const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+    const t = new Date(Date.UTC(y, mo - 1, d, 12));
+    return y >= 2000 && y <= 2100 && t.getUTCMonth() === mo - 1 && t.getUTCDate() === d ? t.toISOString() : null;
+  }
   const d = new Date(value);
-  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+  return Number.isNaN(d.getTime()) || d.getUTCFullYear() < 2000 || d.getUTCFullYear() > 2100 ? null : d.toISOString();
 }
 
 export function formatDate(iso: string | null): string {
   if (!iso) return "";
-  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: APP_TIME_ZONE });
 }

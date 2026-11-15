@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import type { FaceFrame, FaceTracker } from "@/lib/gaze/faceTracker";
 import { IconArrowLeft, IconCamera, IconCheck } from "@/components/icons";
+import { TeacherNote } from "@/components/TeacherNote";
 
 type Check = "ok" | "warn" | "bad" | "wait";
 
@@ -43,6 +44,7 @@ export function Setup({
   calibrationNote = null,
   onUseSaved,
   title,
+  instructions = "",
   backHref,
   resuming = false,
 }: {
@@ -59,6 +61,8 @@ export function Setup({
   /** Start reading with the saved calibration. */
   onUseSaved?: () => void;
   title: string;
+  /** The teacher's instructions for this reading ("" = none). */
+  instructions?: string;
   backHref: string;
   resuming?: boolean;
 }) {
@@ -209,6 +213,7 @@ export function Setup({
               <div className="text-xs font-semibold uppercase tracking-wider text-muted">{resuming ? "Picking up where you left off" : "Getting ready"}</div>
               <h1 className="text-lg font-semibold mt-1 leading-snug">{title}</h1>
             </div>
+            <TeacherNote text={instructions} className="!text-sm max-h-48 overflow-y-auto" />
             <ul className="card divide-y divide-border text-sm">
               <CheckRow state={cameraState === "on" ? checks.face : "wait"} text={checks.face === "bad" ? "Can't find your face" : "Face visible"} />
               <CheckRow state={cameraState === "on" ? checks.center : "wait"} text={checks.center === "warn" ? "Center your face in the oval" : "Centered"} />

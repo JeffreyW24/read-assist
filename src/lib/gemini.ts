@@ -37,6 +37,15 @@ function withTimeout<T>(work: Promise<T>, ms = TIMEOUT_MS): Promise<T> {
 /** What the student sees when Gemini fails. The technical error goes to the server log only. */
 export const AI_FAILED_NOTE = "The AI summary couldn't be created this time, so this is a basic version.";
 
+/**
+ * Asked right before a Gemini call; false = this user has used their AI allowance for now
+ * (see takeAiCall in db.ts), so the basic version is used instead.
+ */
+const AI_BUSY_NOTE = "You've used the AI a lot in the last few minutes, so this is the basic version. Generate again in a few minutes.";
+
+export type AiGate = () => Promise<boolean>;
+const always: AiGate = async () => true;
+
 async function generateJson<T>(prompt: string, schema: object): Promise<T> {
   const ai = client();
   if (!ai) throw new Error("GEMINI_API_KEY is not set");
@@ -103,7 +112,7 @@ const SESSION_SCHEMA = {
   required: ["overview", "sections", "quiz"],
 };
 
-export async function generateSessionAi(reading: Reading, report: SessionReport): Promise<AiResult> {
+export async function generateSessionAi(reading: Reading, report: SessionReport, allowAi: AiGate = always): Promise<AiResult> {
   const groups = missedSections(reading, report.paragraphs);
   if (groups.length === 0) {
     return {
@@ -115,6 +124,8 @@ export async function generateSessionAi(reading: Reading, report: SessionReport)
   }
 
   if (!geminiConfigured()) return fallbackSessionAi(reading, groups, "Add a GEMINI_API_KEY to get AI summaries and quiz questions.");
+  // Over the limit: the basic version, marked failed so "Try again" works later.
+  if (!(await allowAi())) return { ...fallbackSessionAi(reading, groups, AI_FAILED_NOTE), failed: true };
 
   const fullText = reading.paragraphs.join("\n\n").slice(0, 60000);
   const sectionText = groups
@@ -150,7 +161,7 @@ ${fullText}`;
       };
     });
     const quiz = (out.quiz ?? [])
-      .filter((q) => Array.isArray(q.options) && q.options.length >= 2 && q.answerIndex < q.options.length)
+      .filter((q) => Array.isArray(q.options) && q.options.length >= 2 && Number.isInteger(q.answerIndex) && q.answerIndex >= 0 && q.answerIndex < q.options.length)
       .slice(0, 3);
     return { generatedBy: "gemini", overview: out.overview, sections, quiz };
   } catch (err) {
@@ -188,12 +199,15 @@ export interface ClassParagraphAggregate {
   skimmedPct: number;
   avgRereads: number;
   avgDwellRatio: number; // dwell / expected
+  /** Students who have got this far (all who finished, plus those still reading who reached it). */
+  readers: number;
 }
 
 export async function generateClassDigest(
   reading: Reading,
   studentCount: number,
   aggregates: ClassParagraphAggregate[],
+  allowAi: AiGate = always,
 ): Promise<{ text: string; generatedBy: "gemini" | "fallback" }> {
   const body = aggregates.filter((a) => !isHeading(a.text));
   const hardest = [...body].sort((a, b) => b.avgRereads - a.avgRereads).slice(0, 3);
@@ -204,7 +218,9 @@ export async function generateClassDigest(
     const lines = [
       `${studentCount} student${studentCount === 1 ? " has" : "s have"} read this so far.`,
       mostSkipped[0] && mostSkipped[0].skippedPct > 0
-        ? `Most skipped: paragraph ${mostSkipped[0].index + 1} (${Math.round(mostSkipped[0].skippedPct)}% of students).`
+        ? `Most skipped: paragraph ${mostSkipped[0].index + 1} (${Math.round(mostSkipped[0].skippedPct)}% of ${
+            mostSkipped[0].readers < studentCount ? `the ${mostSkipped[0].readers} who have reached it so far` : "students"
+          }).`
         : "No paragraph was widely skipped.",
       hardest[0] && hardest[0].avgRereads > 0
         ? `Most re-read: paragraph ${hardest[0].index + 1} (${hardest[0].avgRereads.toFixed(1)} re-reads per student), which may be a confusing passage.`
@@ -214,11 +230,12 @@ export async function generateClassDigest(
     return { text: lines.join(" "), generatedBy: "fallback" };
   };
   if (!geminiConfigured()) return basic("Add a GEMINI_API_KEY for a written analysis.");
+  if (!(await allowAi())) return basic(AI_BUSY_NOTE);
 
   const table = aggregates
     .map(
       (a) =>
-        `¶${a.index + 1} | skipped ${a.skippedPct.toFixed(0)}% | skimmed ${a.skimmedPct.toFixed(0)}% | re-reads/student ${a.avgRereads.toFixed(1)} | time vs expected ${a.avgDwellRatio.toFixed(2)}x | "${a.text.slice(0, 220)}"`,
+        `¶${a.index + 1} | reached by ${a.readers} | skipped ${a.skippedPct.toFixed(0)}% | skimmed ${a.skimmedPct.toFixed(0)}% | re-reads/student ${a.avgRereads.toFixed(1)} | time vs expected ${a.avgDwellRatio.toFixed(2)}x | "${a.text.slice(0, 220)}"`,
     )
     .join("\n");
 
@@ -248,28 +265,101 @@ Refer to paragraphs as "¶N".`;
 }
 
 // ---------- PDF clean-up helper ----------
+// What it's for: the built-in extractor (lib/pdf.ts) rebuilds paragraphs from where text sits
+// on the page and drops page numbers and repeated headers/footers. That handles most PDFs,
+// but two-column layouts, footnotes, figure captions and unusual headers can still leave
+// paragraphs broken or stray lines in the text. This optional pass (the "clean up with AI"
+// box on the upload form) asks Gemini to fix those. It works through the whole document in
+// chunks, and any chunk it can't clean is kept exactly as extracted, so nothing is ever lost.
 
-/** Optional: ask Gemini to repair paragraph breaks in messy PDF text. */
-export async function cleanExtractedText(raw: string): Promise<string | null> {
-  if (!geminiConfigured()) return null;
+/** Characters per chunk: small enough that Gemini answers well within the time limit. */
+const CLEAN_CHUNK_CHARS = 12_000;
+/** Chunks cleaned at the same time. */
+const CLEAN_PARALLEL = 6;
+/** A cleaned chunk keeping less of the text than this was cut short: the original is kept. */
+const CLEAN_MIN_KEPT = 0.8;
+
+/** Split extracted text into chunks at paragraph breaks (or line breaks, for a huge paragraph). */
+export function chunkText(text: string, max = CLEAN_CHUNK_CHARS): string[] {
+  const chunks: string[] = [];
+  let cur = "";
+  const pieces = text.split(/\n\s*\n/).flatMap((p) => (p.length <= max ? [p] : splitLong(p, max)));
+  for (const p of pieces) {
+    if (cur && cur.length + 2 + p.length > max) {
+      chunks.push(cur);
+      cur = "";
+    }
+    cur = cur ? `${cur}\n\n${p}` : p;
+  }
+  if (cur.trim()) chunks.push(cur);
+  return chunks;
+}
+
+/** A single paragraph longer than a chunk: cut it at sentence ends (or spaces). */
+function splitLong(p: string, max: number): string[] {
+  const out: string[] = [];
+  let rest = p;
+  while (rest.length > max) {
+    const window = rest.slice(0, max);
+    const cut = Math.max(window.lastIndexOf(". "), window.lastIndexOf(" "));
+    const at = cut > max / 2 ? cut + 1 : max;
+    out.push(rest.slice(0, at).trim());
+    rest = rest.slice(at).trim();
+  }
+  if (rest) out.push(rest);
+  return out;
+}
+
+const letters = (t: string) => t.replace(/\s+/g, "").length;
+
+async function cleanChunk(chunk: string): Promise<string | null> {
   try {
     const out = await generateJson<{ paragraphs: string[] }>(
-      `The following text was extracted from a PDF and has broken paragraphs, stray page numbers, running headers/footers and hyphenation artifacts.
+      `The following text was extracted from part of a PDF and may have broken paragraphs, stray page numbers, running headers/footers and hyphenation artifacts.
 Return the body text as a clean list of paragraphs. Keep every sentence of the body verbatim (only fix line-break hyphenation). Keep section headings as their own short paragraphs. Remove page numbers, running headers/footers, and reference-list noise.
+This is one part of a longer document: it may start or end mid-sentence. Keep those partial sentences exactly as they are.
 
 TEXT:
-${raw.slice(0, 120000)}`,
+${chunk}`,
       {
         type: "object",
         properties: { paragraphs: { type: "array", items: { type: "string" } } },
         required: ["paragraphs"],
       },
     );
-    return out.paragraphs.join("\n\n");
+    const cleaned = (Array.isArray(out.paragraphs) ? out.paragraphs : []).map((p) => String(p).trim()).filter(Boolean).join("\n\n");
+    // Clean-up removes a little (page numbers, headers); losing much more means text was dropped.
+    if (letters(cleaned) < letters(chunk) * CLEAN_MIN_KEPT) {
+      console.warn("[gemini] PDF cleanup dropped too much of a chunk; keeping the original");
+      return null;
+    }
+    return cleaned;
   } catch (err) {
-    console.error("[gemini] PDF cleanup failed:", err);
+    console.error("[gemini] PDF cleanup failed for a chunk:", err);
     return null;
   }
+}
+
+/**
+ * Optional: ask Gemini to repair paragraph breaks in messy PDF text. Returns the whole
+ * document (every chunk cleaned or, where that failed, as extracted), or null when no chunk
+ * could be cleaned.
+ */
+export async function cleanExtractedText(raw: string, allowAi: AiGate = always): Promise<string | null> {
+  if (!geminiConfigured() || !raw.trim()) return null;
+  if (!(await allowAi())) return null;
+  const chunks = chunkText(raw);
+  const results: (string | null)[] = new Array(chunks.length).fill(null);
+  let next = 0;
+  const worker = async () => {
+    while (next < chunks.length) {
+      const i = next++;
+      results[i] = await cleanChunk(chunks[i]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(CLEAN_PARALLEL, chunks.length) }, worker));
+  if (results.every((r) => r === null)) return null;
+  return results.map((r, i) => r ?? chunks[i]).join("\n\n");
 }
 
 // ---------- Professor lesson plan ----------
@@ -283,6 +373,7 @@ export async function generateLessonPlan(
   studentCount: number,
   aggregates: ClassParagraphAggregate[],
   classStats: { avgCoverage: number | null; avgFocus: number | null; notStarted: number },
+  allowAi: AiGate = always,
 ): Promise<{ text: string; generatedBy: "gemini" | "fallback" }> {
   const body = aggregates.filter((a) => !isHeading(a.text));
   const struggled = [...body].filter((a) => a.avgRereads > 0 || a.avgDwellRatio > 1.4).sort((a, b) => b.avgRereads + b.avgDwellRatio - (a.avgRereads + a.avgDwellRatio)).slice(0, 3);
@@ -320,11 +411,12 @@ export async function generateLessonPlan(
     return { text: out.join("\n"), generatedBy: "fallback" };
   };
   if (!geminiConfigured()) return basicPlan("Add a GEMINI_API_KEY for a written plan with discussion questions tailored to the text.");
+  if (!(await allowAi())) return basicPlan(AI_BUSY_NOTE);
 
   const table = aggregates
     .map(
       (a) =>
-        `¶${a.index + 1} | skipped ${a.skippedPct.toFixed(0)}% | skimmed ${a.skimmedPct.toFixed(0)}% | re-reads/student ${a.avgRereads.toFixed(1)} | time vs expected ${a.avgDwellRatio.toFixed(2)}x | "${a.text.slice(0, 400)}"`,
+        `¶${a.index + 1} | reached by ${a.readers} | skipped ${a.skippedPct.toFixed(0)}% | skimmed ${a.skimmedPct.toFixed(0)}% | re-reads/student ${a.avgRereads.toFixed(1)} | time vs expected ${a.avgDwellRatio.toFixed(2)}x | "${a.text.slice(0, 400)}"`,
     )
     .join("\n");
   const prompt = `You are helping a college instructor plan the next class session on the assigned reading "${reading.title}".

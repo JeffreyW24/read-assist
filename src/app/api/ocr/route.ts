@@ -1,5 +1,6 @@
 import { getCurrentUser } from "@/lib/auth";
 import { geminiConfigured, transcribePages } from "@/lib/gemini";
+import { takeAiCall } from "@/lib/db";
 
 // Photos or scans of pages → text, using Gemini (much better than on-device OCR at
 // handwriting-free but crooked/shadowed photocopies). Without a key the browser does it instead.
@@ -15,6 +16,8 @@ export async function POST(req: Request) {
   if (total > 18 * 1024 * 1024) return Response.json({ error: "That's too much at once (18 MB max). Try fewer pages." }, { status: 400 });
   const ok = files.every((f) => f.type.startsWith("image/") || f.type === "application/pdf");
   if (!ok) return Response.json({ error: "Upload images (JPG, PNG, HEIC) or a PDF." }, { status: 400 });
+  // Over the AI allowance: the browser reads the pages on the device instead.
+  if (!(await takeAiCall(user.id))) return Response.json({ error: "no-ai" }, { status: 501 });
   try {
     const text = await transcribePages(await Promise.all(files.map(async (f) => ({ mimeType: f.type, data: Buffer.from(await f.arrayBuffer()) }))));
     if (!text) return Response.json({ error: "Couldn't find any text in those pages." }, { status: 422 });

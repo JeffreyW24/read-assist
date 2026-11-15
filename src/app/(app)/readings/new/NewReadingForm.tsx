@@ -4,6 +4,7 @@ import { useMemo, useRef, useState } from "react";
 import { countWords, toParagraphs } from "@/lib/text";
 import type { Role } from "@/lib/types";
 import { IconUpload } from "@/components/icons";
+import { errorMessage, jsonBody } from "@/lib/http";
 
 export function NewReadingForm({
   role,
@@ -44,11 +45,17 @@ export function NewReadingForm({
     const form = new FormData();
     form.append("file", file);
     if (useAi) form.append("ai", "1");
-    const res = await fetch("/api/pdf", { method: "POST", body: form });
-    const data = await res.json();
+    let res: Response;
+    try {
+      res = await fetch("/api/pdf", { method: "POST", body: form });
+    } catch {
+      setBusy("");
+      return setError("Couldn't reach the server. Check your connection and try again.");
+    }
+    const data = await jsonBody(res);
     setBusy("");
     if (res.ok && data.scanned) return readScans([file]); // photocopied pages: read them as images
-    if (!res.ok) return setError(data.error ?? "Couldn't read that PDF.");
+    if (!res.ok) return setError(errorMessage(res, data, "Couldn't read that PDF."));
     setText(data.text);
     setSource("pdf");
     if (!title) setTitle(data.title);
@@ -70,9 +77,10 @@ export function NewReadingForm({
         const form = new FormData();
         files.forEach((f) => form.append("file", f));
         const res = await fetch("/api/ocr", { method: "POST", body: form });
-        const data = await res.json();
+        const data = await jsonBody(res);
         if (res.ok) result = data.text;
-        else if (data.error !== "no-ai") throw new Error(data.error);
+        // "no-ai", or no answer at all: read the pages on this device instead.
+        else if (data.error && data.error !== "no-ai") throw new Error(data.error);
       }
       if (result === null) {
         const { pdfToImages, recognizeImages } = await import("@/lib/ocr");
@@ -121,7 +129,9 @@ export function NewReadingForm({
     e.preventDefault();
     setBusy("save");
     setError("");
-    const res = await fetch("/api/readings", {
+    let res: Response;
+    try {
+      res = await fetch("/api/readings", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -132,11 +142,15 @@ export function NewReadingForm({
         instructions,
         source,
       }),
-    });
-    const data = await res.json();
+      });
+    } catch {
+      setBusy("");
+      return setError("Couldn't reach the server. Check your connection and try again. Your text is still here.");
+    }
+    const data = await jsonBody(res);
     if (!res.ok) {
       setBusy("");
-      return setError(data.error ?? "Couldn't save.");
+      return setError(errorMessage(res, data, "Couldn't save."));
     }
     router.push(role === "professor" && courseId ? `/courses/${courseId}` : `/readings/${data.reading.id}`);
     router.refresh();
@@ -273,12 +287,14 @@ export function NewReadingForm({
             </div>
           </div>
           <div>
-            <label className="label">Instructions for students (optional)</label>
-            <input
-              className="input"
+            <label className="label" htmlFor="instructions">Instructions for students (optional)</label>
+            <textarea
+              id="instructions"
+              className="input min-h-[96px] leading-relaxed"
+              maxLength={5000}
               value={instructions}
               onChange={(e) => setInstructions(e.target.value)}
-              placeholder="Pay attention to the author's argument in section 2."
+              placeholder={"What to focus on, questions to think about, what to bring to class…\nStudents see this under \"From your teacher\" before they start."}
             />
           </div>
         </div>

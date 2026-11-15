@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireUser } from "@/lib/auth";
-import { getCourse, getReading, getSession, getUser } from "@/lib/db";
+import { getCourse, getReading, getSession, getUser, sessionsFor } from "@/lib/db";
 import { formatDate, formatDuration } from "@/lib/text";
 import { PageHeader } from "@/components/AppShell";
 import { Section, Stat } from "@/components/ui";
@@ -25,6 +25,9 @@ export default async function ReportPage({ params }: PageProps<"/reports/[id]">)
   const isProf = course?.professorId === user.id;
   if (!isOwner && !isProf) notFound();
   const student = await getUser(session.userId);
+  // The student's reading time on this text over all their sessions, not just this one.
+  const allOnText = await sessionsFor(session.userId, reading.id);
+  const totalReadingSec = allOnText.reduce((t, s) => t + s.report.activeSec, 0);
 
   const r = session.report;
   const ai = session.ai;
@@ -39,6 +42,8 @@ export default async function ReportPage({ params }: PageProps<"/reports/[id]">)
   const notFacingSec = r.distractions.filter((d) => d.kind !== "tab").reduce((t, d) => t + d.durationSec, 0);
   const coverColor = r.coveragePct >= 85 ? "var(--read)" : r.coveragePct >= 50 ? "var(--skim)" : "var(--skip)";
   const gazeMode = r.calibrationQuality !== "attention-only";
+  // The student reads this as "you"; their teacher sees it about the student.
+  const who = isOwner ? "You" : student?.name.split(" ")[0] || "The student";
 
   return (
     <div className="max-w-4xl">
@@ -63,7 +68,11 @@ export default async function ReportPage({ params }: PageProps<"/reports/[id]">)
           hint={r.avgWpm ? `words / minute${r.baselineWpm ? ` · ${r.baselineWpm} in the warm-up passage` : ""}` : "not enough data"}
         />
         {/* "Reading time" means eyes on the page everywhere in the app; session length is labelled separately. */}
-        <Stat label="Reading time" value={formatDuration(r.activeSec)} hint={`eyes on the page · session length ${formatDuration(r.durationSec)} (incl. distractions)`} />
+        <Stat
+          label="Reading time"
+          value={formatDuration(r.activeSec)}
+          hint={`eyes on the page · session length ${formatDuration(r.durationSec)} (incl. distractions)${allOnText.length > 1 ? ` · ${formatDuration(totalReadingSec)} over all ${allOnText.length} sessions on this text` : ""}`}
+        />
       </div>
 
       <div className="card px-5 py-4 mb-10">
@@ -76,19 +85,23 @@ export default async function ReportPage({ params }: PageProps<"/reports/[id]">)
         <ParagraphStrip stats={r.paragraphs} />
         <p className="text-xs text-faint mt-3">
           {gazeMode
-            ? `Eye tracking: ${r.calibrationQuality} calibration (≈${r.calibrationErrorPx}px). Line-level results are estimates.`
+            ? `Eye tracking: ${r.calibrationQuality} calibration${r.calibrationErrorPx !== null ? ` (≈${Math.round(r.calibrationErrorPx)}px)` : ""}. Line-level results are estimates.`
             : "Focus-only mode: coverage is based on time per page, not line-by-line gaze."}
         </p>
       </div>
 
       {ai && (ai.sections.length > 0 || ai.overview) && (
-        <Section title="What you missed">
+        <Section title={isOwner ? "What you missed" : `What ${who} missed`}>
           <div className="card p-6">
             <div className="flex items-start gap-3">
               <span className="mt-0.5 text-accent">
                 <IconSparkle size={18} />
               </span>
-              <p className="text-[15px] leading-relaxed">{ai.overview}</p>
+              <div>
+                {/* The AI note is written to the student; tell the teacher that's who it's for. */}
+                {!isOwner && <div className="text-xs font-medium text-muted mb-0.5">What {who} was shown</div>}
+                <p className="text-[15px] leading-relaxed">{ai.overview}</p>
+              </div>
             </div>
             {ai.sections.length > 0 && (
               <div className="mt-5 grid gap-3">
@@ -158,14 +171,14 @@ export default async function ReportPage({ params }: PageProps<"/reports/[id]">)
           </div>
           {struggled.length > 0 && (
             <p className="text-sm text-muted">
-              You went back over {struggled.map((p) => `¶${p.index + 1}`).join(" and ")} more than other parts. That usually means a tricky
+              {who} went back over {struggled.map((p) => `¶${p.index + 1}`).join(" and ")} more than other parts. That usually means a tricky
               idea, so it may be worth reviewing or asking about in class.
             </p>
           )}
         </div>
       </Section>
 
-      <Section title="Your reading map" action={<Legend />}>
+      <Section title={isOwner ? "Your reading map" : `${who}'s reading map`} action={<Legend />}>
         <div className="card p-6 sm:p-10 sm:pl-12">
           <ReadingMap paragraphs={reading.paragraphs} wordStatus={r.wordStatus} stats={r.paragraphs} />
         </div>

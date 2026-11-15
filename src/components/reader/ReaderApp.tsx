@@ -13,6 +13,7 @@ import { Setup, type CameraState } from "./Setup";
 import { enterFullscreen, FullscreenGate, useOutOfFullscreen } from "./fullscreen";
 import { fromSaved, sameScreen, toSaved, type SavedCalibration } from "@/lib/gaze/savedCalibration";
 import { loadPace } from "@/lib/gaze/readingPace";
+import { errorMessage, jsonBody } from "@/lib/http";
 
 // calibrate = the dots; readcal = the reading-pace passage. Both are skipped when the student
 // has a saved calibration (calibrate once per account; Recalibrate redoes them).
@@ -21,6 +22,7 @@ type Phase = "setup" | "calibrate" | "readcal" | "reading" | "saving";
 export function ReaderApp({
   readingId,
   title,
+  instructions = "",
   paragraphs,
   backHref,
   resume,
@@ -28,6 +30,8 @@ export function ReaderApp({
 }: {
   readingId: string;
   title: string;
+  /** The teacher's instructions, shown before the student starts ("" = none). */
+  instructions?: string;
   paragraphs: string[];
   backHref: string;
   /** A paused session to continue, if the student has one for this reading. */
@@ -50,7 +54,8 @@ export function ReaderApp({
   const [wet, setWet] = useState<WebEyeTrackSource | null>(null);
   const wetLoad = useRef<Promise<WebEyeTrackSource | null> | null>(null);
   const startedAt = useRef(new Date().toISOString());
-  const pendingSave = useRef<{ report: SessionReport; state: ResumeState | null } | null>(null);
+  // `saveId` stays the same when "Try again" resends a save, so the server never stores it twice.
+  const pendingSave = useRef<{ report: SessionReport; state: ResumeState | null; saveId: string } | null>(null);
   const [pausing, setPausing] = useState(false);
   const [saved, setSaved] = useState(savedCalibration);
   // Calibrate once per account: a saved calibration is always reused (the student can press
@@ -119,8 +124,8 @@ export function ReaderApp({
   }
 
   // Finishing (state = null) builds the report; pausing (state given) saves progress to resume later.
-  async function save(report: SessionReport, state: ResumeState | null) {
-    pendingSave.current = { report, state };
+  async function save(report: SessionReport, state: ResumeState | null, saveId: string = newSaveId()) {
+    pendingSave.current = { report, state, saveId };
     setPausing(!!state);
     setPhase("saving");
     setSaveError("");
@@ -134,6 +139,7 @@ export function ReaderApp({
         body: JSON.stringify({
           readingId,
           sessionId: resume?.sessionId ?? null,
+          saveId,
           startedAt: startedAt.current,
           endedAt: new Date().toISOString(),
           status: state ? "paused" : "done",
@@ -141,8 +147,8 @@ export function ReaderApp({
           resume: state,
         }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Save failed");
+      const data = await jsonBody(res);
+      if (!res.ok || typeof data.id !== "string") throw new Error(errorMessage(res, data, "Save failed."));
       router.push(state ? `${backHref}?paused=1` : `/reports/${data.id}`);
     } catch (e) {
       setSaveError((e as Error).message);
@@ -198,6 +204,7 @@ export function ReaderApp({
             beginReading(m, null);
           }}
           title={title}
+          instructions={instructions}
           backHref={backHref}
           resuming={!!resume}
         />
@@ -258,7 +265,7 @@ export function ReaderApp({
               <>
                 <p className="font-medium">Couldn&apos;t save your session</p>
                 <p className="text-sm text-muted mt-1">{saveError}</p>
-                <button className="btn btn-primary mt-5" onClick={() => pendingSave.current && save(pendingSave.current.report, pendingSave.current.state)}>
+                <button className="btn btn-primary mt-5" onClick={() => pendingSave.current && save(pendingSave.current.report, pendingSave.current.state, pendingSave.current.saveId)}>
                   Try again
                 </button>
               </>
@@ -276,6 +283,10 @@ export function ReaderApp({
       )}
     </>
   );
+}
+
+function newSaveId(): string {
+  return typeof crypto.randomUUID === "function" ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
 /** The gaze engine is fixed for the page's lifetime: nothing to subscribe to. */

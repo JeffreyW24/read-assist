@@ -10,7 +10,21 @@ import { createClient, type Client, type InStatement, type Row } from "@libsql/c
 import type { ClassDigest, Course, LessonPlan, Reading, ResumeState, Session, SessionStatus, User, WebReading } from "./types";
 import { countWords, toParagraphs } from "./text";
 import { SAMPLE_TEXT, SAMPLE_TITLE } from "./sample";
-import { normalizeReport } from "./validate";
+import { normalizeAi, normalizeReport } from "./validate";
+
+/** A list of strings from a JSON column (anything else in it is dropped). */
+const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
+
+/** Saved recall answers, keeping only well-formed ones. */
+function recallOf(v: unknown): Session["recall"] {
+  if (typeof v !== "object" || v === null || Array.isArray(v)) return undefined;
+  const out: NonNullable<Session["recall"]> = {};
+  for (const [k, r] of Object.entries(v as Record<string, unknown>)) {
+    const o = r as { text?: unknown; savedAt?: unknown } | null;
+    if (o && typeof o.text === "string") out[k] = { text: o.text, savedAt: typeof o.savedAt === "string" ? o.savedAt : "" };
+  }
+  return Object.keys(out).length ? out : undefined;
+}
 
 const DATA_DIR = path.join(process.cwd(), "data");
 const LEGACY_JSON = path.join(DATA_DIR, "db.json");
@@ -39,7 +53,8 @@ const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS users (
      id TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT NOT NULL UNIQUE, role TEXT NOT NULL,
-     password_hash TEXT, demo INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL)`,
+     password_hash TEXT, demo INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, dyslexia_font INTEGER NOT NULL DEFAULT 0,
+     username TEXT, recovery_hash TEXT)`,
   `CREATE TABLE IF NOT EXISTS courses (
      id TEXT PRIMARY KEY, name TEXT NOT NULL, code TEXT NOT NULL, term TEXT NOT NULL DEFAULT '',
      professor_id TEXT NOT NULL REFERENCES users(id), join_code TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL)`,
@@ -54,7 +69,7 @@ const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS sessions (
      id TEXT PRIMARY KEY, reading_id TEXT NOT NULL REFERENCES readings(id), user_id TEXT NOT NULL REFERENCES users(id),
      started_at TEXT NOT NULL, ended_at TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'done', sittings INTEGER NOT NULL DEFAULT 1,
-     report TEXT NOT NULL, ai TEXT, recall TEXT, resume TEXT)`,
+     report TEXT NOT NULL, ai TEXT, recall TEXT, resume TEXT, save_id TEXT)`,
   `CREATE INDEX IF NOT EXISTS sessions_reading ON sessions(reading_id)`,
   `CREATE INDEX IF NOT EXISTS sessions_user ON sessions(user_id)`,
   `CREATE TABLE IF NOT EXISTS digests (
@@ -64,7 +79,71 @@ const SCHEMA = [
      created_at TEXT NOT NULL, based_on_sessions INTEGER NOT NULL)`,
   WEB_READINGS_SCHEMA,
   CALIBRATIONS_SCHEMA,
+  // Gemini calls per user, for a simple rate limit (see takeAiCall).
+  `CREATE TABLE IF NOT EXISTS ai_calls (user_id TEXT NOT NULL, at TEXT NOT NULL)`,
+  `CREATE INDEX IF NOT EXISTS ai_calls_user ON ai_calls(user_id, at)`,
+  // Signed-in browsers. The cookie names one of these rows, so signing out (or changing the
+  // password) can cut a session off for good, not just delete the cookie in one browser.
+  `CREATE TABLE IF NOT EXISTS auth_sessions (
+     id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), created_at TEXT NOT NULL, expires_at TEXT NOT NULL)`,
+  `CREATE INDEX IF NOT EXISTS auth_sessions_user ON auth_sessions(user_id)`,
+  // Wrong recovery-code tries, to stop guessing (see "Forgot password").
+  `CREATE TABLE IF NOT EXISTS recovery_attempts (user_id TEXT NOT NULL, at TEXT NOT NULL)`,
+  `CREATE INDEX IF NOT EXISTS recovery_attempts_user ON recovery_attempts(user_id, at)`,
 ];
+
+// Columns added to existing tables after they were first created. CREATE TABLE IF NOT EXISTS
+// doesn't touch a table that's already there, so older databases get them here.
+const ADDED_COLUMNS: { table: string; column: string; def: string }[] = [
+  { table: "users", column: "dyslexia_font", def: "INTEGER NOT NULL DEFAULT 0" },
+  { table: "users", column: "username", def: "TEXT" },
+  { table: "users", column: "recovery_hash", def: "TEXT" },
+  { table: "sessions", column: "status", def: "TEXT NOT NULL DEFAULT 'done'" },
+  { table: "sessions", column: "sittings", def: "INTEGER NOT NULL DEFAULT 1" },
+  { table: "sessions", column: "resume", def: "TEXT" },
+  { table: "sessions", column: "save_id", def: "TEXT" },
+];
+// Needs save_id, so it runs after the columns are added.
+const SAVE_ID_INDEX = `CREATE UNIQUE INDEX IF NOT EXISTS sessions_save ON sessions(user_id, save_id) WHERE save_id IS NOT NULL`;
+
+async function addMissingColumns(c: Client) {
+  for (const table of new Set(ADDED_COLUMNS.map((a) => a.table))) {
+    const { rows } = await c.execute(`PRAGMA table_info(${table})`);
+    const have = new Set(rows.map((r) => String(r.name)));
+    for (const a of ADDED_COLUMNS)
+      if (a.table === table && !have.has(a.column))
+        await c.execute(`ALTER TABLE ${a.table} ADD COLUMN ${a.column} ${a.def}`).catch((e) => {
+          // Another server instance starting at the same moment may have just added it.
+          if (!/duplicate column/i.test(String(e?.message ?? e))) throw e;
+        });
+  }
+  await c.execute(SAVE_ID_INDEX);
+  await backfillUsernames(c);
+}
+
+// ---------- usernames ----------
+// People sign in with a username. Accounts made before usernames existed get one from their
+// email (the part before the @), made unique with a number when needed.
+export const USERNAME_RULE = /^[a-z0-9][a-z0-9._-]{2,29}$/;
+
+/** A username as stored: trimmed and lowercase (usernames aren't case-sensitive). */
+export const normalizeUsername = (u: string) => u.trim().toLowerCase();
+
+async function backfillUsernames(c: Client) {
+  const { rows } = await c.execute("SELECT id, email FROM users WHERE username IS NULL OR username = ''");
+  if (rows.length) {
+    const taken = new Set((await c.execute("SELECT username FROM users WHERE username IS NOT NULL")).rows.map((r) => String(r.username)));
+    for (const r of rows) {
+      let base = String(r.email).split("@")[0].toLowerCase().replace(/[^a-z0-9._-]/g, "").replace(/^[._-]+/, "").slice(0, 26);
+      if (base.length < 3) base = (base + "user").slice(0, 26);
+      let name = base;
+      for (let n = 2; taken.has(name); n++) name = `${base}${n}`;
+      taken.add(name);
+      await c.execute({ sql: "UPDATE users SET username = ? WHERE id = ?", args: [name, String(r.id)] });
+    }
+  }
+  await c.execute("CREATE UNIQUE INDEX IF NOT EXISTS users_username ON users(username)");
+}
 
 const g = globalThis as unknown as { __raClient?: Client; __raReady?: Promise<void> };
 
@@ -92,18 +171,29 @@ async function db(): Promise<Client> {
 async function init() {
   const c = client();
   await c.batch(SCHEMA, "write");
+  await addMissingColumns(c);
   const { rows } = await c.execute("SELECT COUNT(*) AS n FROM users");
   if (Number(rows[0].n) > 0) return;
   if (existsSync(LEGACY_JSON)) await importLegacyJson(c);
   else await seed(c);
+  await backfillUsernames(c);
 }
 
 // ---------- row mappers ----------
-const json = <T>(v: unknown, fallback: T): T => (typeof v === "string" && v ? (JSON.parse(v) as T) : fallback);
+/** A JSON column, or the fallback when it's empty or damaged (a bad row must never crash a page). */
+const json = <T>(v: unknown, fallback: T): T => {
+  if (typeof v !== "string" || !v) return fallback;
+  try {
+    return JSON.parse(v) as T;
+  } catch {
+    console.error("[db] unreadable JSON in a row; using a default");
+    return fallback;
+  }
+};
 const str = (v: unknown) => (v === null || v === undefined ? null : String(v));
 
 function toUser(r: Row): User {
-  return { id: String(r.id), name: String(r.name), email: String(r.email), role: r.role as User["role"], createdAt: String(r.created_at), demo: !!Number(r.demo) };
+  return { id: String(r.id), name: String(r.name), username: String(r.username ?? ""), email: String(r.email), role: r.role as User["role"], createdAt: String(r.created_at), demo: !!Number(r.demo), dyslexiaFont: !!Number(r.dyslexia_font ?? 0), hasRecoveryCode: !!r.recovery_hash };
 }
 function toCourse(r: Row): Course {
   return {
@@ -113,7 +203,7 @@ function toCourse(r: Row): Course {
 }
 function toReading(r: Row): Reading {
   return {
-    id: String(r.id), title: String(r.title), paragraphs: json<string[]>(r.paragraphs, []), wordCount: Number(r.word_count),
+    id: String(r.id), title: String(r.title), paragraphs: strings(json<unknown>(r.paragraphs, [])), wordCount: Number(r.word_count),
     ownerId: String(r.owner_id), courseId: str(r.course_id), dueDate: str(r.due_date), instructions: String(r.instructions ?? ""),
     source: r.source as Reading["source"], createdAt: String(r.created_at),
   };
@@ -122,7 +212,7 @@ function toSession(r: Row, withResume = false): Session {
   return {
     id: String(r.id), readingId: String(r.reading_id), userId: String(r.user_id), startedAt: String(r.started_at),
     endedAt: String(r.ended_at), status: (r.status as SessionStatus) ?? "done", sittings: Number(r.sittings ?? 1),
-    report: normalizeReport(json<unknown>(r.report, null)), ai: json(r.ai, null), recall: json(r.recall, undefined),
+    report: normalizeReport(json<unknown>(r.report, null)), ai: normalizeAi(json<unknown>(r.ai, null)), recall: recallOf(json<unknown>(r.recall, undefined)),
     resume: withResume ? json<ResumeState | null>(r.resume, null) : undefined,
   };
 }
@@ -137,8 +227,8 @@ async function seed(c: Client) {
   const due = new Date(Date.now() + 5 * 864e5).toISOString().slice(0, 10) + "T12:00:00.000Z";
   await c.batch(
     [
-      { sql: "INSERT INTO users (id,name,email,role,demo,created_at) VALUES (?,?,?,?,1,?)", args: ["user_demo_prof", "Prof. Rivera", "prof@demo.edu", "professor", now] },
-      { sql: "INSERT INTO users (id,name,email,role,demo,created_at) VALUES (?,?,?,?,1,?)", args: ["user_demo_student", "Sam Student", "student@demo.edu", "student", now] },
+      { sql: "INSERT INTO users (id,name,email,username,role,demo,created_at) VALUES (?,?,?,?,?,1,?)", args: ["user_demo_prof", "Prof. Rivera", "prof@demo.edu", "prof.rivera", "professor", now] },
+      { sql: "INSERT INTO users (id,name,email,username,role,demo,created_at) VALUES (?,?,?,?,?,1,?)", args: ["user_demo_student", "Sam Student", "student@demo.edu", "sam.student", "student", now] },
       {
         sql: "INSERT INTO courses (id,name,code,term,professor_id,join_code,created_at) VALUES (?,?,?,?,?,?,?)",
         args: ["course_demo", "Cognitive Science of Learning", "PSYC 214", "Fall 2026", "user_demo_prof", "READ01", now],
@@ -220,18 +310,120 @@ export async function getUser(id: string | undefined | null): Promise<User | nul
   return rows[0] ? toUser(rows[0]) : null;
 }
 
-export async function getUserByEmail(email: string): Promise<(User & { passwordHash: string | null }) | null> {
-  const { rows } = await (await db()).execute({ sql: "SELECT * FROM users WHERE email = ?", args: [email.trim().toLowerCase()] });
+export type UserWithPassword = User & { passwordHash: string | null };
+
+export async function getUserByUsername(username: string): Promise<UserWithPassword | null> {
+  const { rows } = await (await db()).execute({ sql: "SELECT * FROM users WHERE username = ?", args: [normalizeUsername(username)] });
   return rows[0] ? { ...toUser(rows[0]), passwordHash: str(rows[0].password_hash) } : null;
 }
 
-export async function createUser(name: string, email: string, role: User["role"], passwordHash: string | null): Promise<User> {
-  const user: User = { id: newId("user"), name: name.trim(), email: email.trim().toLowerCase(), role, createdAt: new Date().toISOString(), demo: false };
-  await (await db()).execute({
-    sql: "INSERT INTO users (id,name,email,role,password_hash,demo,created_at) VALUES (?,?,?,?,?,0,?)",
-    args: [user.id, user.name, user.email, user.role, passwordHash, user.createdAt],
+/**
+ * The account someone is signing in to. Usernames are the normal way; accounts made when the
+ * app used emails can still sign in with that email.
+ */
+export async function getUserForSignIn(login: string): Promise<UserWithPassword | null> {
+  const v = login.trim().toLowerCase();
+  const { rows } = await (await db()).execute({
+    sql: v.includes("@") ? "SELECT * FROM users WHERE email = ?" : "SELECT * FROM users WHERE username = ?",
+    args: [v],
   });
-  return user;
+  return rows[0] ? { ...toUser(rows[0]), passwordHash: str(rows[0].password_hash) } : null;
+}
+
+/** Creates the account, or returns null when the username is already taken (even by a sign-up that raced this one). */
+export async function createUser(name: string, username: string, role: User["role"], passwordHash: string | null): Promise<User | null> {
+  const u = normalizeUsername(username);
+  const id = newId("user");
+  // There's no email any more; the old column still needs a unique value. ".invalid" can never be a real address.
+  const user: User = { id, name: name.trim(), username: u, email: `${id}@no-email.invalid`, role, createdAt: new Date().toISOString(), demo: false };
+  const res = await (await db()).execute({
+    sql: "INSERT INTO users (id,name,email,username,role,password_hash,demo,created_at) VALUES (?,?,?,?,?,?,0,?) ON CONFLICT DO NOTHING",
+    args: [user.id, user.name, user.email, user.username, user.role, passwordHash, user.createdAt],
+  });
+  return res.rowsAffected > 0 ? user : null;
+}
+
+// ---------- Sign-in sessions and passwords ----------
+/** Start a sign-in session; returns its id (what the cookie carries). Old expired ones are cleared. */
+export async function createAuthSession(userId: string, maxAgeSec: number): Promise<string> {
+  const id = randomBytes(24).toString("base64url");
+  const now = new Date();
+  await (await db()).batch(
+    [
+      { sql: "INSERT INTO auth_sessions (id, user_id, created_at, expires_at) VALUES (?,?,?,?)", args: [id, userId, now.toISOString(), new Date(now.getTime() + maxAgeSec * 1000).toISOString()] },
+      { sql: "DELETE FROM auth_sessions WHERE expires_at < ?", args: [now.toISOString()] },
+    ],
+    "write",
+  );
+  return id;
+}
+
+/** The user a still-valid sign-in session belongs to, or null. */
+export async function userForAuthSession(sessionId: string): Promise<User | null> {
+  const { rows } = await (await db()).execute({
+    sql: "SELECT u.* FROM auth_sessions s JOIN users u ON u.id = s.user_id WHERE s.id = ? AND s.expires_at > ?",
+    args: [sessionId, new Date().toISOString()],
+  });
+  return rows[0] ? toUser(rows[0]) : null;
+}
+
+export async function deleteAuthSession(sessionId: string) {
+  await (await db()).execute({ sql: "DELETE FROM auth_sessions WHERE id = ?", args: [sessionId] });
+}
+
+/** Sign a user out everywhere, except (optionally) the session they're using right now. */
+export async function deleteAuthSessionsForUser(userId: string, exceptSessionId: string | null = null) {
+  await (await db()).execute({
+    sql: "DELETE FROM auth_sessions WHERE user_id = ? AND id != ?",
+    args: [userId, exceptSessionId ?? ""],
+  });
+}
+
+export async function getPasswordHash(userId: string): Promise<string | null> {
+  const { rows } = await (await db()).execute({ sql: "SELECT password_hash FROM users WHERE id = ?", args: [userId] });
+  return rows[0] ? str(rows[0].password_hash) : null;
+}
+
+/** Set a new password (real accounts only: shared demo accounts never get one). */
+export async function setPasswordHash(userId: string, passwordHash: string) {
+  await (await db()).execute({ sql: "UPDATE users SET password_hash = ? WHERE id = ? AND demo = 0", args: [passwordHash, userId] });
+}
+
+/** The stored (hashed) recovery code, if the account has one. */
+export async function getRecoveryHash(userId: string): Promise<string | null> {
+  const { rows } = await (await db()).execute({ sql: "SELECT recovery_hash FROM users WHERE id = ?", args: [userId] });
+  return rows[0] ? str(rows[0].recovery_hash) : null;
+}
+
+/** Give the account a new recovery code (by its hash), replacing any old one. Real accounts only. */
+export async function setRecoveryHash(userId: string, hash: string) {
+  await (await db()).execute({ sql: "UPDATE users SET recovery_hash = ? WHERE id = ? AND demo = 0", args: [hash, userId] });
+}
+
+/** Wrong recovery-code tries for this account since a moment. */
+export async function countRecoveryAttemptsSince(userId: string, sinceIso: string): Promise<number> {
+  const { rows } = await (await db()).execute({ sql: "SELECT COUNT(*) AS n FROM recovery_attempts WHERE user_id = ? AND at > ?", args: [userId, sinceIso] });
+  return Number(rows[0].n);
+}
+
+export async function recordRecoveryAttempt(userId: string) {
+  const now = new Date();
+  await (await db()).batch(
+    [
+      { sql: "INSERT INTO recovery_attempts (user_id, at) VALUES (?, ?)", args: [userId, now.toISOString()] },
+      { sql: "DELETE FROM recovery_attempts WHERE at < ?", args: [new Date(now.getTime() - 86_400_000).toISOString()] },
+    ],
+    "write",
+  );
+}
+
+export async function clearRecoveryAttempts(userId: string) {
+  await (await db()).execute({ sql: "DELETE FROM recovery_attempts WHERE user_id = ?", args: [userId] });
+}
+
+/** Save a user's display settings (see the Settings page). */
+export async function saveUserSettings(id: string, settings: { dyslexiaFont: boolean }) {
+  await (await db()).execute({ sql: "UPDATE users SET dyslexia_font = ? WHERE id = ?", args: [settings.dyslexiaFont ? 1 : 0, id] });
 }
 
 export async function demoUsers(): Promise<User[]> {
@@ -368,32 +560,54 @@ export async function createReading(input: Omit<Reading, "id" | "createdAt" | "w
   return reading;
 }
 
-export async function updateReadingDueDate(id: string, dueDate: string | null) {
-  await (await db()).execute({ sql: "UPDATE readings SET due_date = ? WHERE id = ?", args: [dueDate, id] });
+/** Change a reading's details after posting (the text itself stays, so student data still fits it). */
+export async function updateReadingDetails(id: string, d: { title: string; dueDate: string | null; instructions: string }) {
+  await (await db()).execute({
+    sql: "UPDATE readings SET title = ?, due_date = ?, instructions = ? WHERE id = ?",
+    args: [d.title, d.dueDate, d.instructions, id],
+  });
 }
 
 // ---------- Sessions ----------
-export async function createSession(input: Omit<Session, "id">): Promise<Session> {
+/**
+ * Saves a new session. `saveId` identifies this save from the browser: if the same save was
+ * already stored (a retry after a lost response, a double submit), nothing new is written and
+ * the session that holds it is returned.
+ */
+export async function createSession(input: Omit<Session, "id">, saveId: string | null = null): Promise<Session> {
   const session: Session = { ...input, id: newId("session") };
-  await (await db()).execute({
-    sql: "INSERT INTO sessions (id,reading_id,user_id,started_at,ended_at,status,sittings,report,ai,recall,resume) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+  const c = await db();
+  const res = await c.execute({
+    sql: `INSERT INTO sessions (id,reading_id,user_id,started_at,ended_at,status,sittings,report,ai,recall,resume,save_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+          ON CONFLICT (user_id, save_id) WHERE save_id IS NOT NULL DO NOTHING`,
     args: [
       session.id, session.readingId, session.userId, session.startedAt, session.endedAt, session.status, session.sittings,
       JSON.stringify(session.report), session.ai ? JSON.stringify(session.ai) : null, null,
-      session.resume ? JSON.stringify(session.resume) : null,
+      session.resume ? JSON.stringify(session.resume) : null, saveId,
     ],
   });
+  if (res.rowsAffected === 0 && saveId) {
+    const existing = await sessionBySaveId(session.userId, saveId);
+    if (existing) return existing;
+  }
   return session;
+}
+
+/** The session a given browser save went into, if it was already stored. */
+export async function sessionBySaveId(userId: string, saveId: string): Promise<Session | null> {
+  const { rows } = await (await db()).execute({ sql: `SELECT ${SESSION_COLS} FROM sessions WHERE user_id = ? AND save_id = ?`, args: [userId, saveId] });
+  return rows[0] ? toSession(rows[0]) : null;
 }
 
 /** Save progress on an existing session (pause again, or finish it). */
 export async function updateSession(
   id: string,
   patch: { endedAt: string; status: SessionStatus; sittings: number; report: Session["report"]; ai: Session["ai"]; resume: ResumeState | null },
+  saveId: string | null = null,
 ) {
   await (await db()).execute({
-    sql: "UPDATE sessions SET ended_at = ?, status = ?, sittings = ?, report = ?, ai = ?, resume = ? WHERE id = ?",
-    args: [patch.endedAt, patch.status, patch.sittings, JSON.stringify(patch.report), patch.ai ? JSON.stringify(patch.ai) : null, patch.resume ? JSON.stringify(patch.resume) : null, id],
+    sql: "UPDATE sessions SET ended_at = ?, status = ?, sittings = ?, report = ?, ai = ?, resume = ?, save_id = COALESCE(?, save_id) WHERE id = ?",
+    args: [patch.endedAt, patch.status, patch.sittings, JSON.stringify(patch.report), patch.ai ? JSON.stringify(patch.ai) : null, patch.resume ? JSON.stringify(patch.resume) : null, saveId, id],
   });
 }
 
@@ -456,6 +670,52 @@ export async function sessionsForReadings(readingIds: string[]): Promise<Session
   return rows.map((r) => toSession(r));
 }
 
+/**
+ * Sessions on course readings by students enrolled in that course. Class numbers use these, so
+ * the professor trying a reading themselves (or anyone not in the class) never counts as a student.
+ */
+export async function studentSessionsForReadings(readingIds: string[]): Promise<Session[]> {
+  if (!readingIds.length) return [];
+  const cols = SESSION_COLS.split(", ").map((c) => `s.${c}`).join(", ");
+  const { rows } = await (await db()).execute({
+    sql: `SELECT ${cols} FROM sessions s
+          JOIN readings r ON r.id = s.reading_id
+          JOIN enrollments e ON e.course_id = r.course_id AND e.user_id = s.user_id
+          WHERE s.reading_id IN (${readingIds.map(() => "?").join(",")}) ORDER BY s.ended_at DESC`,
+    args: readingIds,
+  });
+  return rows.map((r) => toSession(r));
+}
+
+export async function studentSessionsForReading(readingId: string): Promise<Session[]> {
+  return studentSessionsForReadings([readingId]);
+}
+
+// ---------- AI rate limit ----------
+/** Gemini calls each user may start per window (session summaries, PDF clean-up, class AI…). */
+const AI_CALLS_PER_WINDOW = 20;
+const AI_WINDOW_MS = 10 * 60 * 1000;
+
+/**
+ * Records one Gemini call for this user if they're under the limit, and says whether it may
+ * go ahead. Over the limit, callers use their basic (non-AI) version instead.
+ */
+export async function takeAiCall(userId: string): Promise<boolean> {
+  const c = await db();
+  const now = Date.now();
+  const since = new Date(now - AI_WINDOW_MS).toISOString();
+  const { rows } = await c.execute({ sql: "SELECT COUNT(*) AS n FROM ai_calls WHERE user_id = ? AND at > ?", args: [userId, since] });
+  if (Number(rows[0].n) >= AI_CALLS_PER_WINDOW) return false;
+  await c.batch(
+    [
+      { sql: "INSERT INTO ai_calls (user_id, at) VALUES (?, ?)", args: [userId, new Date(now).toISOString()] },
+      { sql: "DELETE FROM ai_calls WHERE at < ?", args: [new Date(now - 24 * 3600 * 1000).toISOString()] },
+    ],
+    "write",
+  );
+  return true;
+}
+
 // ---------- Class digests and lesson plans (professor AI) ----------
 export async function getDigest(readingId: string): Promise<ClassDigest | null> {
   const { rows } = await (await db()).execute({ sql: "SELECT * FROM digests WHERE reading_id = ?", args: [readingId] });
@@ -508,13 +768,17 @@ async function webDb(): Promise<Client> {
 }
 
 function toWebReading(r: Row): WebReading {
-  const d = json<Partial<WebReading>>(r.data, {});
+  const raw = json<unknown>(r.data, {});
+  const d = (typeof raw === "object" && raw !== null ? raw : {}) as Partial<WebReading>;
   return {
     id: String(r.id), userId: String(r.user_id), url: String(r.url), title: String(r.title), site: String(r.site),
     firstSeen: String(r.first_seen), lastSeen: String(r.last_seen), importedAt: String(r.imported_at),
     coveragePct: Number(r.coverage_pct), activeSec: Number(r.active_sec),
     totalWords: d.totalWords ?? 0, eyeSec: d.eyeSec ?? 0, wordsRead: d.wordsRead ?? 0, wordsSkimmed: d.wordsSkimmed ?? 0,
-    wordsSkipped: d.wordsSkipped ?? 0, paragraphs: d.paragraphs ?? [],
+    wordsSkipped: d.wordsSkipped ?? 0,
+    paragraphs: (Array.isArray(d.paragraphs) ? d.paragraphs : []).filter(
+      (p): p is WebReading["paragraphs"][number] => typeof p === "object" && p !== null && typeof p.text === "string",
+    ),
   };
 }
 

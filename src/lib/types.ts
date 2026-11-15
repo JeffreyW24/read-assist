@@ -5,11 +5,18 @@ export type Role = "student" | "professor";
 export interface User {
   id: string;
   name: string;
+  /** What they sign in with (lowercase, unique). */
+  username: string;
+  /** Only accounts from before usernames have a real one; new accounts don't give an email. */
   email: string;
   role: Role;
   createdAt: string;
   /** Demo accounts sign in with one click; real accounts need a password. */
   demo?: boolean;
+  /** Show the whole site in a dyslexia-friendly font (OpenDyslexic). Set on the Settings page. */
+  dyslexiaFont?: boolean;
+  /** Has a recovery code for resetting a forgotten password (see lib/recoveryCode.ts). */
+  hasRecoveryCode?: boolean;
 }
 
 export interface Course {

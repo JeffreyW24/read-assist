@@ -18,6 +18,7 @@ export default async function ReadPage({ params, searchParams }: PageProps<"/rea
     <ReaderApp
       readingId={reading.id}
       title={reading.title}
+      instructions={reading.courseId ? reading.instructions : ""}
       paragraphs={reading.paragraphs}
       backHref={`/readings/${reading.id}`}
       resume={paused?.resume ? { sessionId: paused.id, state: paused.resume } : null}
