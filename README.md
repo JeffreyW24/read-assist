@@ -4,7 +4,7 @@ A reading coach that uses your laptop webcam to follow your reading line by line
 
 Students read assigned (or their own) readings in a calm, distraction-free reader. Teachers create courses, assign readings, see class-wide maps of which passages were skipped or re-read, and get lesson plans built from that.
 
-> Hackathon demo. Accounts use an email and password (the two demo accounts sign in with one click), and data lives in a SQLite file, `data/read-assist.db`. Camera video never leaves the browser: only "which words were read" is saved. Reports are measured in the student's browser, so treat them as a study aid, not as proof of reading.
+> Hackathon demo. Accounts use a username and password (on your own computer, two demo accounts also sign in with one click; they are turned off on a hosted site unless `DEMO_ACCOUNTS=1` is set), and data lives in a SQLite file, `data/read-assist.db`. Camera video never leaves the browser: only "which words were read" is saved. Reports are measured in the student's browser, so treat them as a study aid, not as proof of reading.
 
 ---
 
