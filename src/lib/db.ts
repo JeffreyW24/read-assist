@@ -4,6 +4,7 @@
 //     database and the exact same code talks to it over the network.
 // The first time it starts, anything in the old data/db.json is copied in, so no test data is lost.
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { demoAccountsEnabled } from "./demo";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { createClient, type Client, type InStatement, type Row } from "@libsql/client";
@@ -175,7 +176,8 @@ async function init() {
   const { rows } = await c.execute("SELECT COUNT(*) AS n FROM users");
   if (Number(rows[0].n) > 0) return;
   if (existsSync(LEGACY_JSON)) await importLegacyJson(c);
-  else await seed(c);
+  else if (demoAccountsEnabled()) await seed(c); // a hosted site starts empty: no shared demo accounts
+  else return;
   await backfillUsernames(c);
 }
 
@@ -364,7 +366,9 @@ export async function userForAuthSession(sessionId: string): Promise<User | null
     sql: "SELECT u.* FROM auth_sessions s JOIN users u ON u.id = s.user_id WHERE s.id = ? AND s.expires_at > ?",
     args: [sessionId, new Date().toISOString()],
   });
-  return rows[0] ? toUser(rows[0]) : null;
+  const user = rows[0] ? toUser(rows[0]) : null;
+  // With demo accounts turned off, a demo sign-in from before stops working too.
+  return user?.demo && !demoAccountsEnabled() ? null : user;
 }
 
 export async function deleteAuthSession(sessionId: string) {
@@ -426,7 +430,9 @@ export async function saveUserSettings(id: string, settings: { dyslexiaFont: boo
   await (await db()).execute({ sql: "UPDATE users SET dyslexia_font = ? WHERE id = ?", args: [settings.dyslexiaFont ? 1 : 0, id] });
 }
 
+/** The one-click demo accounts to offer on the sign-in page (none when they're turned off). */
 export async function demoUsers(): Promise<User[]> {
+  if (!demoAccountsEnabled()) return [];
   const { rows } = await (await db()).execute("SELECT * FROM users WHERE demo = 1 ORDER BY role, created_at");
   return rows.map(toUser);
 }
@@ -470,7 +476,13 @@ export async function createCourse(professorId: string, name: string, code: stri
 
 export async function joinCourse(userId: string, joinCode: string): Promise<Course | null> {
   const c = await db();
-  const { rows } = await c.execute({ sql: "SELECT * FROM courses WHERE join_code = ?", args: [joinCode.trim().toUpperCase()] });
+  // With demo accounts off, the demo teacher's sample course (seeded earlier) can't be joined either.
+  const { rows } = await c.execute({
+    sql: demoAccountsEnabled()
+      ? "SELECT * FROM courses WHERE join_code = ?"
+      : "SELECT c.* FROM courses c JOIN users u ON u.id = c.professor_id WHERE c.join_code = ? AND u.demo = 0",
+    args: [joinCode.trim().toUpperCase()],
+  });
   if (!rows[0]) return null;
   const course = toCourse(rows[0]);
   if (course.professorId === userId) return course;

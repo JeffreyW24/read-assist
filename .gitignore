@@ -45,6 +45,3 @@ next-env.d.ts
 /public/pdfjs
 /data
 !.env.example
-# Hackathon only: the shared Gemini key lives in .env so teammates don't each need to add it.
-# Delete that key in Google AI Studio after the hackathon, and before this repo goes public.
-!.env

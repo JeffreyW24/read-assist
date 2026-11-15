@@ -2,7 +2,9 @@
 
 **Know what you actually read.** eyeRead uses an ordinary laptop webcam to follow your reading line by line. It shows which parts of a text you read, skimmed or skipped, then helps you catch up on what you missed.
 
-Built for classrooms (teachers assign readings and see where the class struggled) and for everyday reading, with a Chrome extension that works on news sites like the Wall Street Journal.
+Students read assigned (or their own) readings in a calm, distraction-free reader. Teachers create courses, assign readings, see class-wide maps of which passages were skipped or re-read, and get lesson plans built from that. For everyday reading, the Chrome extension works on news sites like the Wall Street Journal.
+
+> Hackathon demo. Accounts use a username and password (on your own computer, two demo accounts also sign in with one click; they are turned off on a hosted site unless `DEMO_ACCOUNTS=1` is set), and data lives in a SQLite file, `data/read-assist.db`. Camera video never leaves the browser: only "which words were read" is saved. Reports are measured in the student's browser, so treat them as a study aid, not as proof of reading.
 
 ---
 
