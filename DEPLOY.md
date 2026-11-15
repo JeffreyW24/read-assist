@@ -65,13 +65,14 @@ The app already supports this: on your laptop it uses the file `data/read-assist
 1. **Database:** sign up at turso.tech (GitHub login works) → **Create database** → name it `read-assist`.
    - Copy its **URL** (starts with `libsql://`).
    - Click **Generate token** and copy the token.
-   - The tables are created automatically on the first visit, and a demo teacher, student and course are added.
+   - The tables are created automatically on the first visit. The hosted site starts empty: no demo accounts.
 2. **Website:** sign up at vercel.com with GitHub → **Add New → Project** → import `read-assist`.
 3. Before clicking Deploy, open **Environment Variables** and add:
    - `DATABASE_URL`: the Turso URL
    - `DATABASE_AUTH_TOKEN`: the Turso token
    - `AUTH_SECRET`: any long random string (run `openssl rand -hex 32` in Terminal and paste the result)
    - `GEMINI_API_KEY`: optional, your Gemini key
+   - Never put a real key in a file that is committed to GitHub. Keys go here in Vercel, and in `.env.local` on your own computer.
 4. Click **Deploy**. After ~2 minutes you get a link like `https://read-assist-abc.vercel.app`.
 5. Open it on your MacBook, create an account, allow the camera, and try a reading.
 
@@ -81,5 +82,5 @@ The app already supports this: on your laptop it uses the file `data/read-assist
   - Text PDFs are usually far smaller, so they're fine.
   - Large scanned PDFs or many phone photos at once may be too big: upload a few pages at a time. On-device text recognition (no Gemini key) is unaffected, since it runs in the browser.
 - **Your local test data stays local.** The hosted site starts with a fresh database. That's usually what you want for a demo (no test clutter).
-- **Demo accounts** (one-click buttons on the sign-in page) also exist on the hosted site. That's handy for judges. Real users should create accounts with a password.
+- **Demo accounts are off on the hosted site.** The one-click Prof. Rivera and Sam Student buttons only show on your own computer, because on a public link anyone could sign in to them. Visitors create an account instead. To turn them on anyway (for example, for judges), add the environment variable `DEMO_ACCOUNTS=1` in Vercel and redeploy.
 - **Camera privacy** is unchanged: video is processed in the browser; only the reading statistics are saved.
